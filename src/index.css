@@ -1,0 +1,222 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* AgriTrace Design System - Government of Odisha Agricultural Traceability Platform
+All colors MUST be HSL for consistent theming.
+*/
+
+@layer base {
+  :root {
+    /* Minimalistic Core Colors */
+    --background: 0 0% 100%;
+    --foreground: 0 0% 9%;
+
+    /* Clean Card Surfaces */
+    --card: 0 0% 100%;
+    --card-foreground: 0 0% 9%;
+
+    /* Popover Surfaces */
+    --popover: 0 0% 100%;
+    --popover-foreground: 0 0% 9%;
+
+    /* Minimal Primary - Clean Forest */
+    --primary: 150 30% 20%;
+    --primary-foreground: 0 0% 100%;
+    --primary-hover: 150 30% 15%;
+    --primary-light: 150 20% 95%;
+
+    /* Subtle Secondary */
+    --secondary: 0 0% 96%;
+    --secondary-foreground: 0 0% 9%;
+    --secondary-hover: 0 0% 92%;
+    --secondary-light: 0 0% 98%;
+
+    /* Clean Accent */
+    --accent: 0 0% 96%;
+    --accent-foreground: 0 0% 9%;
+    --accent-light: 0 0% 98%;
+
+    /* Minimal Muted */
+    --muted: 0 0% 96%;
+    --muted-foreground: 0 0% 45%;
+
+    /* Status Colors - Minimal */
+    --success: 120 40% 20%;
+    --success-foreground: 0 0% 100%;
+    --warning: 45 80% 50%;
+    --warning-foreground: 0 0% 9%;
+    --destructive: 0 60% 50%;
+    --destructive-foreground: 0 0% 100%;
+
+    /* Clean Interactive Elements */
+    --border: 0 0% 90%;
+    --input: 0 0% 96%;
+    --ring: 150 30% 20%;
+
+    /* Minimal Radius */
+    --radius: 0.5rem;
+
+    /* Minimal Gradients */
+    --gradient-primary: linear-gradient(135deg, hsl(var(--primary)), hsl(var(--primary-hover)));
+    --gradient-secondary: linear-gradient(135deg, hsl(var(--secondary)), hsl(var(--secondary-hover)));
+    --gradient-hero: linear-gradient(135deg, hsl(var(--primary)) 0%, hsl(0 0% 20%) 100%);
+    --gradient-card: hsl(var(--card));
+    
+    /* Clean Minimal Shadows */
+    --shadow-soft: 0 1px 3px hsl(0 0% 0% / 0.05);
+    --shadow-medium: 0 4px 12px hsl(0 0% 0% / 0.1);
+    --shadow-large: 0 10px 25px hsl(0 0% 0% / 0.1);
+    
+    /* Animations */
+    --transition-smooth: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    --transition-spring: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+
+    --sidebar-background: 0 0% 98%;
+
+    --sidebar-foreground: 240 5.3% 26.1%;
+
+    --sidebar-primary: 240 5.9% 10%;
+
+    --sidebar-primary-foreground: 0 0% 98%;
+
+    --sidebar-accent: 240 4.8% 95.9%;
+
+    --sidebar-accent-foreground: 240 5.9% 10%;
+
+    --sidebar-border: 220 13% 91%;
+
+    --sidebar-ring: 217.2 91.2% 59.8%;
+  }
+
+  .dark {
+    /* Dark Mode - Professional Night Theme */
+    --background: 150 25% 8%;
+    --foreground: 42 15% 95%;
+
+    --card: 150 20% 12%;
+    --card-foreground: 42 15% 95%;
+
+    --popover: 150 20% 12%;
+    --popover-foreground: 42 15% 95%;
+
+    --primary: 150 55% 65%;
+    --primary-foreground: 150 25% 8%;
+    --primary-hover: 150 55% 70%;
+    --primary-light: 150 35% 20%;
+
+    --secondary: 25 25% 65%;
+    --secondary-foreground: 25 35% 8%;
+    --secondary-hover: 25 25% 70%;
+    --secondary-light: 25 15% 15%;
+
+    --accent: 215 75% 65%;
+    --accent-foreground: 215 85% 8%;
+    --accent-light: 215 35% 20%;
+
+    --muted: 150 15% 15%;
+    --muted-foreground: 42 10% 65%;
+
+    --success: 120 55% 55%;
+    --success-foreground: 120 65% 8%;
+    --warning: 45 85% 65%;
+    --warning-foreground: 45 95% 8%;
+    --destructive: 0 65% 65%;
+    --destructive-foreground: 0 75% 8%;
+
+    --border: 150 15% 18%;
+    --input: 150 15% 18%;
+    --ring: 150 55% 65%;
+
+    /* Updated Gradients for Dark Mode */
+    --gradient-primary: linear-gradient(135deg, hsl(var(--primary)), hsl(var(--primary-hover)));
+    --gradient-secondary: linear-gradient(135deg, hsl(var(--secondary)), hsl(var(--secondary-hover)));
+    --gradient-hero: linear-gradient(135deg, hsl(var(--primary)) 0%, hsl(var(--accent)) 100%);
+    --gradient-card: linear-gradient(145deg, hsl(var(--card)) 0%, hsl(var(--muted)) 100%);
+
+    /* Dark Mode Shadows */
+    --shadow-soft: 0 2px 8px -2px hsl(0 0% 0% / 0.3);
+    --shadow-medium: 0 8px 25px -5px hsl(0 0% 0% / 0.4);
+    --shadow-large: 0 15px 35px -5px hsl(0 0% 0% / 0.5);
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground font-sans;
+  }
+}
+
+@layer components {
+  /* AgriTrace Custom Component Classes */
+  .gradient-primary {
+    background: var(--gradient-primary);
+  }
+  
+  .gradient-secondary {
+    background: var(--gradient-secondary);
+  }
+  
+  .gradient-hero {
+    background: var(--gradient-hero);
+  }
+  
+  .gradient-card {
+    background: var(--gradient-card);
+  }
+  
+  .shadow-soft {
+    box-shadow: var(--shadow-soft);
+  }
+  
+  .shadow-medium {
+    box-shadow: var(--shadow-medium);
+  }
+  
+  .shadow-large {
+    box-shadow: var(--shadow-large);
+  }
+  
+  .transition-smooth {
+    transition: var(--transition-smooth);
+  }
+  
+  .transition-spring {
+    transition: var(--transition-spring);
+  }
+
+  /* Government Professional Card Style */
+  .govt-card {
+    @apply bg-card border border-border rounded-lg shadow-soft transition-smooth;
+  }
+
+  /* AgriTrace Hero Section */
+  .hero-section {
+    @apply relative overflow-hidden;
+    background: var(--gradient-hero);
+  }
+
+  /* Professional Form Styling */
+  .govt-form {
+    @apply space-y-6 p-6 govt-card;
+  }
+}
+
+@layer utilities {
+  /* Text Gradients */
+  .text-gradient-primary {
+    background: var(--gradient-primary);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+  
+  /* Hover Effects */
+  .hover-lift {
+    @apply transform transition-spring hover:-translate-y-1 hover:shadow-medium;
+  }
+}
