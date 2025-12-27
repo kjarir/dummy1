@@ -5,9 +5,9 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/com
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { useToast } from '@/components/ui/use-toast';
-import { fetchVoiceGenieCalls, validateVoiceGenieData, type VoiceGenieCall } from '@/services/voicegenieService';
-import { registerBatchFromVoiceGenie } from '@/services/voicegenieBatchRegistration';
-import { useWeb3 } from '@/contexts/Web3Context';
+import { fetchVoiceGenieCalls, validateVoiceGenieData, type VoiceGenieCall } from '@/features/batch-registration/services/voicegenieService';
+import { registerBatchFromVoiceGenie } from '@/features/batch-registration/services/voicegenieBatchRegistration';
+import { useWeb3 } from '@/features/blockchain/contexts/Web3Context';
 import { 
   Phone, 
   User, 

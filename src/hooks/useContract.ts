@@ -1,6 +1,6 @@
 import { useState, useCallback } from 'react';
 import { ethers } from 'ethers';
-import { useWeb3 } from '@/contexts/Web3Context';
+import { useWeb3 } from '@/features/blockchain/contexts/Web3Context';
 import { BatchInput, Batch } from '@/contracts/config';
 import { useToast } from '@/components/ui/use-toast';
 

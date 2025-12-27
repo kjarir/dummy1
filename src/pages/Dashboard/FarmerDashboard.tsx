@@ -18,10 +18,10 @@ import {
   Download,
   ArrowUpRight
 } from 'lucide-react';
-import { QRCodeModal } from '@/components/QRCodeModal';
-import { QuickCertificateQR } from '@/components/QuickCertificateQR';
+import { QRCodeModal } from '@/features/qr-code/components/QRCodeModal';
+import { QuickCertificateQR } from '@/features/qr-code/components/QuickCertificateQR';
 import { Link } from 'react-router-dom';
-import { BatchList } from '@/components/BatchList';
+import { BatchList } from '@/features/batch-registration/components/BatchList';
 
 export const FarmerDashboard = () => {
   const { user } = useAuth();

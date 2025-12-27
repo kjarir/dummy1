@@ -22,12 +22,12 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Progress } from '@/components/ui/progress';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { DataCleanupButton } from '@/components/DataCleanupButton';
-import { DatabaseMigrationButton } from '@/components/DatabaseMigrationButton';
-import { TransactionSystemTest } from '@/components/TransactionSystemTest';
-import { DebugGroupManager } from '@/components/DebugGroupManager';
-import { ManualGroupFileAdder } from '@/components/ManualGroupFileAdder';
-import { SingleStepDebugManager } from '@/components/SingleStepDebugManager';
+import { DataCleanupButton } from '@/features/debug/components/DataCleanupButton';
+import { DatabaseMigrationButton } from '@/features/debug/components/DatabaseMigrationButton';
+import { TransactionSystemTest } from '@/features/debug/components/TransactionSystemTest';
+import { DebugGroupManager } from '@/features/debug/components/DebugGroupManager';
+import { ManualGroupFileAdder } from '@/features/debug/components/ManualGroupFileAdder';
+import { SingleStepDebugManager } from '@/features/debug/components/SingleStepDebugManager';
 
 export const Admin = () => {
   const [activeTab, setActiveTab] = useState('overview');

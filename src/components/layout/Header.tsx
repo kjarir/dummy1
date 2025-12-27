@@ -3,7 +3,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import { Menu, X, Leaf, User, ShoppingCart, Shield, LogIn, LogOut, Wallet, Camera, Truck, Package, MapPin } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
-import { useWeb3 } from '@/contexts/Web3Context';
+import { useWeb3 } from '@/features/blockchain/contexts/Web3Context';
 import {
   DropdownMenu,
   DropdownMenuContent,

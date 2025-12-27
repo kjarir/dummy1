@@ -34,7 +34,7 @@ import { Progress } from '@/components/ui/progress';
 import { Separator } from '@/components/ui/separator';
 import { useToast } from '@/components/ui/use-toast';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
-import { analyzeCropHealth, type CropHealthAnalysis } from '@/services/cropHealthService';
+import { analyzeCropHealth, type CropHealthAnalysis } from '@/features/ai-services/services/cropHealthService';
 
 export const Profile = () => {
   const { user } = useAuth();

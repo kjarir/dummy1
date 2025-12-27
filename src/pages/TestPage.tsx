@@ -1,7 +1,7 @@
 import { useAuth } from '@/contexts/AuthContext';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { DatabaseDebugger } from '@/components/DatabaseDebugger';
+import { DatabaseDebugger } from '@/features/debug/components/DatabaseDebugger';
 
 export const TestPage = () => {
   const { user, profile, loading, signOut } = useAuth();
