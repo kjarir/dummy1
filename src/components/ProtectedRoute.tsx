@@ -3,6 +3,9 @@ import { useAuth } from '@/contexts/AuthContext';
 import { Navigate, useLocation } from 'react-router-dom';
 import { Loader2 } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
+import { logger } from '@/lib/logger';
+import { sanitizeError, sanitizeString } from '@/lib/security';
+import { Tables } from '@/integrations/supabase/types';
 
 interface ProtectedRouteProps {
   children: React.ReactNode;
@@ -17,7 +20,7 @@ export const ProtectedRoute = ({ children, allowedUserTypes }: ProtectedRoutePro
     // If we already have a profile, no need to load
     return !profile;
   });
-  const [fetchedProfile, setFetchedProfile] = React.useState<any>(null);
+  const [fetchedProfile, setFetchedProfile] = React.useState<Tables<'profiles'> | null>(null);
 
   // Fetch profile directly if it's not loaded yet - CRITICAL: Must complete before access check
   React.useEffect(() => {
@@ -30,28 +33,32 @@ export const ProtectedRoute = ({ children, allowedUserTypes }: ProtectedRoutePro
       // Try to fetch profile directly from database
       const fetchProfileDirectly = async () => {
         try {
-          console.log('🔄 ProtectedRoute: Fetching profile for user:', user.id);
+          logger.debug('ProtectedRoute: Fetching profile for user', { userId: sanitizeString(user.id, 100) });
           const { data: profileList, error } = await supabase
             .from('profiles')
             .select('*')
             .eq('user_id', user.id)
-            .limit(1);
+            .limit(1)
+            .returns<Tables<'profiles'>[]>();
           
           if (!isMounted) return; // Component unmounted, don't update state
           
           if (!error && profileList && profileList.length > 0) {
-            console.log('✅ Profile fetched directly in ProtectedRoute:', profileList[0]);
+            logger.debug('Profile fetched directly in ProtectedRoute', { profileId: sanitizeString(profileList[0]?.id, 100) });
             setFetchedProfile(profileList[0]);
             setProfileLoading(false); // Only set to false AFTER profile is fetched
           } else {
             // Profile doesn't exist or error
-            console.warn('⚠️ Profile not found in ProtectedRoute:', error?.message || 'No profile found');
+            logger.warn('Profile not found in ProtectedRoute', { 
+              error: error ? sanitizeError(error) : 'No profile found',
+              userId: sanitizeString(user.id, 100)
+            });
             setFetchedProfile(null);
             setProfileLoading(false); // Set to false even if no profile found
           }
         } catch (err) {
           if (!isMounted) return;
-          console.error('❌ Error fetching profile in ProtectedRoute:', err);
+          logger.error('Error fetching profile in ProtectedRoute', err);
           setFetchedProfile(null);
           setProfileLoading(false);
         }
@@ -60,7 +67,7 @@ export const ProtectedRoute = ({ children, allowedUserTypes }: ProtectedRoutePro
       fetchProfileDirectly();
     } else if (profile) {
       // Profile is already loaded from context, we're good
-      console.log('✅ Profile already loaded from context');
+      logger.debug('Profile already loaded from context');
       setProfileLoading(false);
     } else if (!user) {
       // No user, no need to wait
@@ -121,37 +128,40 @@ export const ProtectedRoute = ({ children, allowedUserTypes }: ProtectedRoutePro
   }
   
   // Log for debugging
-  console.log('🔐 ProtectedRoute check:', {
-    path: location.pathname,
-    effectiveUserType,
+  logger.debug('ProtectedRoute check', {
+    path: sanitizeString(location.pathname, 255),
+    effectiveUserType: sanitizeString(effectiveUserType, 50),
     allowedUserTypes,
-    fromProfile: userTypeFromProfile,
-    fromMetadata: userTypeFromMetadata,
+    fromProfile: sanitizeString(userTypeFromProfile, 50),
+    fromMetadata: sanitizeString(userTypeFromMetadata, 50),
     profileExists: !!activeProfile,
     profileFromContext: !!profile,
     profileFetched: !!fetchedProfile,
-    profileId: activeProfile?.id,
-    userEmail: user?.email,
-    userId: user?.id
+    profileId: activeProfile?.id ? sanitizeString(activeProfile.id, 100) : undefined,
+    userEmail: user?.email ? sanitizeString(user.email, 255) : undefined,
+    userId: user?.id ? sanitizeString(user.id, 100) : undefined
   });
   
   // Check if user type is allowed
   if (allowedUserTypes && allowedUserTypes.length > 0) {
     if (!effectiveUserType || !allowedUserTypes.includes(effectiveUserType)) {
-      console.error('🚫 Access denied:', {
-        effectiveUserType,
+      logger.warn('Access denied', {
+        effectiveUserType: sanitizeString(effectiveUserType, 50),
         allowedUserTypes,
-        fromProfile: userTypeFromProfile,
-        fromMetadata: userTypeFromMetadata,
-        profile: activeProfile,
-        profileFromContext: profile,
-        profileFetched: fetchedProfile,
-        path: location.pathname
+        fromProfile: sanitizeString(userTypeFromProfile, 50),
+        fromMetadata: sanitizeString(userTypeFromMetadata, 50),
+        profileExists: !!activeProfile,
+        profileFromContext: !!profile,
+        profileFetched: !!fetchedProfile,
+        path: sanitizeString(location.pathname, 255)
       });
       return <Navigate to="/unauthorized" replace />;
     }
   }
 
-  console.log('✅ Access granted:', { effectiveUserType, allowedUserTypes });
+  logger.debug('Access granted', { 
+    effectiveUserType: sanitizeString(effectiveUserType, 50), 
+    allowedUserTypes 
+  });
   return <>{children}</>;
 };

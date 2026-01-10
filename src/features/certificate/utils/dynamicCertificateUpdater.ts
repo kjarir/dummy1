@@ -1,4 +1,5 @@
 import { IPFSService } from '@/features/ipfs/utils/ipfs';
+import { logger } from '@/lib/logger';
 import { generatePDFCertificate, EnhancedBatchData } from '@/features/certificate/utils/certificateGenerator';
 import { getEnhancedBatchData } from '@/features/supply-chain/utils/supplyChainTracker';
 
@@ -28,7 +29,7 @@ export const storeCertificateData = async (
 
     return pinataResponse.IpfsHash;
   } catch (error) {
-    console.error('Error storing certificate data:', error);
+    logger.error('Error storing certificate data:', error);
     throw new Error('Failed to store certificate data');
   }
 };
@@ -51,18 +52,18 @@ export const updateCertificateData = async (
     const ipfsService = IPFSService.getInstance();
     try {
       await ipfsService.unpinFile(existingDataHash);
-      console.log(`Unpinned old certificate data: ${existingDataHash}`);
+      logger.debug(`Unpinned old certificate data: ${existingDataHash}`);
     } catch (unpinError) {
-      console.warn('Failed to unpin old certificate data:', unpinError);
+      logger.warn('Failed to unpin old certificate data:', unpinError);
     }
 
     // Store the updated certificate data
     const newDataHash = await storeCertificateData(batchId, enhancedBatchData);
     
-    console.log(`Updated certificate data: ${existingDataHash} -> ${newDataHash}`);
+    logger.debug(`Updated certificate data: ${existingDataHash} -> ${newDataHash}`);
     return newDataHash;
   } catch (error) {
-    console.error('Error updating certificate data:', error);
+    logger.error('Error updating certificate data:', error);
     throw new Error('Failed to update certificate data');
   }
 };
@@ -83,7 +84,7 @@ export const generateCertificateFromData = async (
     
     return pdfBlob;
   } catch (error) {
-    console.error('Error generating certificate from data:', error);
+    logger.error('Error generating certificate from data:', error);
     throw new Error('Failed to generate certificate from data');
   }
 };
@@ -132,7 +133,7 @@ export const updateCertificateWithSupplyChainData = async (
 
     return newDataHash;
   } catch (error) {
-    console.error('Error updating certificate with supply chain data:', error);
+    logger.error('Error updating certificate with supply chain data:', error);
     throw new Error('Failed to update certificate with supply chain data');
   }
 };

@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { logger } from '@/lib/logger';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -58,16 +59,16 @@ export const BatchDetailsModal: React.FC<BatchDetailsModalProps> = ({ batch, isO
           .single();
         
         if (error) {
-          console.warn('Could not fetch current owner profile:', error);
+          logger.warn('Could not fetch current owner profile:', error);
           return;
         }
         
         if (ownerProfile) {
-          console.log('✅ Fetched current owner profile:', ownerProfile);
+          logger.debug('✅ Fetched current owner profile:', ownerProfile);
           setCurrentOwnerProfile(ownerProfile);
         }
       } catch (error) {
-        console.error('Error fetching current owner:', error);
+        logger.error('Error fetching current owner:', error);
       }
     };
     
@@ -92,16 +93,16 @@ export const BatchDetailsModal: React.FC<BatchDetailsModalProps> = ({ batch, isO
           .limit(1);
         
         if (error) {
-          console.error('Error fetching IPFS hash:', error);
+          logger.error('Error fetching IPFS hash:', error);
           return;
         }
         
         if (data && data.length > 0) {
           setIpfsHash(data[0].ipfs_hash);
-          console.log('✅ Found IPFS hash from group_files:', data[0].ipfs_hash);
+          logger.debug('✅ Found IPFS hash from group_files:', data[0].ipfs_hash);
         }
       } catch (error) {
-        console.error('Error fetching IPFS hash:', error);
+        logger.error('Error fetching IPFS hash:', error);
       }
     };
 
@@ -118,13 +119,13 @@ export const BatchDetailsModal: React.FC<BatchDetailsModalProps> = ({ batch, isO
   if (!batch || !batchData) return null;
 
   // Debug logging
-  console.log('🔍 BatchDetailsModal - Full batch object:', batch);
-  console.log('🔍 BatchDetailsModal - batchData:', batchData);
-  console.log('🔍 BatchDetailsModal - group_id:', batchData.group_id);
-  console.log('🔍 BatchDetailsModal - ipfsHash state:', ipfsHash);
-  console.log('🔍 BatchDetailsModal - batchData.ipfs_hash:', batchData.ipfs_hash);
-  console.log('🔍 BatchDetailsModal - batchData.ipfs_certificate_hash:', batchData.ipfs_certificate_hash);
-  console.log('🔍 BatchDetailsModal - All batchData keys:', Object.keys(batchData));
+  logger.debug('🔍 BatchDetailsModal - Full batch object:', batch);
+  logger.debug('🔍 BatchDetailsModal - batchData:', batchData);
+  logger.debug('🔍 BatchDetailsModal - group_id:', batchData.group_id);
+  logger.debug('🔍 BatchDetailsModal - ipfsHash state:', ipfsHash);
+  logger.debug('🔍 BatchDetailsModal - batchData.ipfs_hash:', batchData.ipfs_hash);
+  logger.debug('🔍 BatchDetailsModal - batchData.ipfs_certificate_hash:', batchData.ipfs_certificate_hash);
+  logger.debug('🔍 BatchDetailsModal - All batchData keys:', Object.keys(batchData));
 
   const handleVerifyCertificate = () => {
     if (batchData.blockchain_id || batchData.blockchain_batch_id) {

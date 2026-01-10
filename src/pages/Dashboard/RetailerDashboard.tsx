@@ -1,6 +1,9 @@
 import { useState, useEffect } from 'react';
+import { logger } from '@/lib/logger';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
+import { Tables } from '@/integrations/supabase/types';
+import { sanitizeError } from '@/lib/security';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -24,7 +27,7 @@ export const RetailerDashboard = () => {
     activeInventory: 0,
     customerSatisfaction: 0
   });
-  const [recentTransactions, setRecentTransactions] = useState<any[]>([]);
+  const [recentTransactions, setRecentTransactions] = useState<Array<Tables<'transactions'> & { batch?: Tables<'batches'> }>>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -80,7 +83,7 @@ export const RetailerDashboard = () => {
 
       setRecentTransactions(purchasesWithDetails?.slice(0, 5) || []);
     } catch (error) {
-      console.error('Error fetching retailer dashboard data:', error);
+      logger.error('Error fetching retailer dashboard data', error);
     } finally {
       setLoading(false);
     }

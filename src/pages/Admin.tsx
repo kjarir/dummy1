@@ -22,12 +22,30 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Progress } from '@/components/ui/progress';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { DataCleanupButton } from '@/features/debug/components/DataCleanupButton';
-import { DatabaseMigrationButton } from '@/features/debug/components/DatabaseMigrationButton';
-import { TransactionSystemTest } from '@/features/debug/components/TransactionSystemTest';
-import { DebugGroupManager } from '@/features/debug/components/DebugGroupManager';
-import { ManualGroupFileAdder } from '@/features/debug/components/ManualGroupFileAdder';
-import { SingleStepDebugManager } from '@/features/debug/components/SingleStepDebugManager';
+import { useState, useEffect, lazy, Suspense } from 'react';
+import { Tables } from '@/integrations/supabase/types';
+import { logger } from '@/lib/logger';
+import { sanitizeError } from '@/lib/security';
+
+// Debug components - lazy loaded only in development
+const DataCleanupButton = import.meta.env.DEV 
+  ? lazy(() => import('@/features/debug/components/DataCleanupButton').then(m => ({ default: m.DataCleanupButton })))
+  : () => null;
+const DatabaseMigrationButton = import.meta.env.DEV
+  ? lazy(() => import('@/features/debug/components/DatabaseMigrationButton').then(m => ({ default: m.DatabaseMigrationButton })))
+  : () => null;
+const TransactionSystemTest = import.meta.env.DEV
+  ? lazy(() => import('@/features/debug/components/TransactionSystemTest').then(m => ({ default: m.TransactionSystemTest })))
+  : () => null;
+const DebugGroupManager = import.meta.env.DEV
+  ? lazy(() => import('@/features/debug/components/DebugGroupManager').then(m => ({ default: m.DebugGroupManager })))
+  : () => null;
+const ManualGroupFileAdder = import.meta.env.DEV
+  ? lazy(() => import('@/features/debug/components/ManualGroupFileAdder').then(m => ({ default: m.ManualGroupFileAdder })))
+  : () => null;
+const SingleStepDebugManager = import.meta.env.DEV
+  ? lazy(() => import('@/features/debug/components/SingleStepDebugManager').then(m => ({ default: m.SingleStepDebugManager })))
+  : () => null;
 
 export const Admin = () => {
   const [activeTab, setActiveTab] = useState('overview');
@@ -40,9 +58,9 @@ export const Admin = () => {
     monthlyGrowth: 0,
     activeUsers: 0
   });
-  const [recentUsers, setRecentUsers] = useState<any[]>([]);
-  const [recentBatches, setRecentBatches] = useState<any[]>([]);
-  const [auditLogs, setAuditLogs] = useState<any[]>([]);
+  const [recentUsers, setRecentUsers] = useState<Tables<'profiles'>[]>([]);
+  const [recentBatches, setRecentBatches] = useState<(Tables<'batches'> & { profiles?: Pick<Tables<'profiles'>, 'full_name'> | null })[]>([]);
+  const [auditLogs, setAuditLogs] = useState<Array<Record<string, unknown>>>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -52,33 +70,65 @@ export const Admin = () => {
   const fetchAdminData = async () => {
     try {
       // Fetch users
-      const { data: users } = await (supabase as any)
+      const { data: users, error: usersError } = await supabase
         .from('profiles')
         .select('*')
         .order('created_at', { ascending: false })
-        .limit(10);
+        .limit(10)
+        .returns<Tables<'profiles'>[]>();
+
+      if (usersError) {
+        logger.error('Error fetching users', usersError);
+        throw new Error(`Failed to fetch users: ${sanitizeError(usersError)}`);
+      }
 
       // Fetch batches
-      const { data: batches } = await (supabase as any)
+      type BatchWithProfile = Tables<'batches'> & {
+        profiles?: Pick<Tables<'profiles'>, 'full_name'> | null;
+      };
+      
+      const { data: batches, error: batchesError } = await supabase
         .from('batches')
         .select(`
           *,
           profiles:farmer_id (full_name)
         `)
         .order('created_at', { ascending: false })
-        .limit(10);
+        .limit(10)
+        .returns<BatchWithProfile[]>();
+
+      if (batchesError) {
+        logger.error('Error fetching batches', batchesError);
+        throw new Error(`Failed to fetch batches: ${sanitizeError(batchesError)}`);
+      }
 
       // Fetch transactions
-      const { data: transactions } = await (supabase as any)
+      const { data: transactions, error: transactionsError } = await supabase
         .from('transactions')
-        .select('*');
-
-      // Fetch audit logs
-      const { data: logs } = await (supabase as any)
-        .from('audit_logs')
         .select('*')
-        .order('created_at', { ascending: false })
-        .limit(10);
+        .returns<Tables<'transactions'>[]>();
+
+      if (transactionsError) {
+        logger.error('Error fetching transactions', transactionsError);
+      }
+
+      // Fetch audit logs (if table exists)
+      let logs: Array<Record<string, unknown>> = [];
+      try {
+        const { data: auditLogsData, error: logsError } = await supabase
+          .from('audit_logs')
+          .select('*')
+          .order('created_at', { ascending: false })
+          .limit(10);
+        
+        if (logsError && logsError.code !== 'PGRST116') {
+          logger.warn('Error fetching audit logs', logsError);
+        } else {
+          logs = (auditLogsData || []) as Array<Record<string, unknown>>;
+        }
+      } catch (error) {
+        logger.debug('Audit logs table not available', error);
+      }
 
       if (users && Array.isArray(users)) {
         // Ensure all users have required fields
@@ -93,7 +143,7 @@ export const Admin = () => {
         
         setRecentUsers(safeUsers);
         const totalUsers = safeUsers.length;
-        const verifiedUsers = safeUsers.filter((u: any) => u.is_verified).length;
+        const verifiedUsers = safeUsers.filter((u: Tables<'profiles'>) => u.is_verified).length;
         
         setStats(prev => ({ 
           ...prev, 
@@ -128,7 +178,7 @@ export const Admin = () => {
         setAuditLogs(logs);
       }
     } catch (error) {
-      console.error('Error fetching admin data:', error);
+      logger.error('Error fetching admin data', error);
     } finally {
       setLoading(false);
     }

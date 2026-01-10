@@ -3,6 +3,9 @@
  * Uses AI to detect crop diseases and provide remedies
  */
 
+import { logger } from '@/lib/logger';
+import { sanitizeError, uploadRateLimiter } from '@/lib/security';
+
 export interface CropHealthAnalysis {
   disease?: string;
   diseaseName?: string;
@@ -27,9 +30,47 @@ export interface CropHealthResponse {
  * Model: liriope/PlantDiseaseDetection
  */
 export async function analyzeCropHealth(imageFile: File): Promise<CropHealthResponse> {
+  // Validate file input
+  if (!imageFile || imageFile.size === 0) {
+    return {
+      success: false,
+      error: 'Invalid image file'
+    };
+  }
+
+  // Check file size (max 10MB)
+  const MAX_FILE_SIZE = 10 * 1024 * 1024;
+  if (imageFile.size > MAX_FILE_SIZE) {
+    return {
+      success: false,
+      error: 'Image file too large. Maximum size is 10MB'
+    };
+  }
+
+  // Validate file type
+  const validTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
+  if (!validTypes.includes(imageFile.type)) {
+    return {
+      success: false,
+      error: 'Invalid image format. Please use JPEG, PNG, or WebP'
+    };
+  }
+
+  // Rate limiting check
+  const userId = 'anonymous'; // In real app, use actual user ID
+  if (!uploadRateLimiter.isAllowed(userId)) {
+    return {
+      success: false,
+      error: 'Too many requests. Please try again later'
+    };
+  }
+
   try {
-    console.log('🔍 Starting crop health analysis...');
-    console.log('📁 Image file:', imageFile.name, imageFile.type, imageFile.size);
+    logger.debug('Starting crop health analysis', { 
+      fileName: imageFile.name, 
+      type: imageFile.type, 
+      size: imageFile.size 
+    });
     
     // Use Hugging Face Inference API
     const HF_API_URL = 'https://api-inference.huggingface.co/models/liriope/PlantDiseaseDetection';
@@ -43,12 +84,7 @@ export async function analyzeCropHealth(imageFile: File): Promise<CropHealthResp
     // Add authorization if API key is available
     if (HF_API_KEY) {
       headers['Authorization'] = `Bearer ${HF_API_KEY}`;
-      console.log('🔑 Using Hugging Face API key');
-    } else {
-      console.log('⚠️ No Hugging Face API key found, will use mock analysis');
     }
-    
-    console.log('📤 Sending image to Hugging Face API...');
     
     // Call Hugging Face Inference API with the file directly
     const hfResponse = await fetch(HF_API_URL, {
@@ -58,12 +94,9 @@ export async function analyzeCropHealth(imageFile: File): Promise<CropHealthResp
     });
 
     if (!hfResponse.ok) {
-      const errorText = await hfResponse.text();
-      console.error('❌ Hugging Face API error:', hfResponse.status, errorText);
-      
       // If API key is missing or rate limited, use mock for demo
       if (hfResponse.status === 401 || hfResponse.status === 429) {
-        console.log('⚠️ Using mock analysis (API key missing or rate limited)');
+        logger.warn('Hugging Face API unavailable, using mock analysis');
         const mockResponse = await mockAIAnalysis(imageFile);
         return {
           success: true,
@@ -71,11 +104,11 @@ export async function analyzeCropHealth(imageFile: File): Promise<CropHealthResp
         };
       }
       
-      throw new Error(`API request failed: ${hfResponse.status} ${errorText}`);
+      logger.error('Hugging Face API error', { status: hfResponse.status });
+      throw new Error('Failed to analyze image');
     }
 
     const hfData = await hfResponse.json();
-    console.log('✅ Hugging Face API response:', hfData);
     
     // Parse Hugging Face response and convert to our format
     const analysis = parseHuggingFaceResponse(hfData);
@@ -85,11 +118,11 @@ export async function analyzeCropHealth(imageFile: File): Promise<CropHealthResp
       analysis
     };
   } catch (error) {
-    console.error('❌ Error analyzing crop health:', error);
+    logger.error('Error analyzing crop health', error);
     
     // Fallback to mock if API fails
     try {
-      console.log('🔄 Falling back to mock analysis...');
+      logger.debug('Falling back to mock analysis');
       const mockResponse = await mockAIAnalysis(imageFile);
       return {
         success: true,
@@ -98,7 +131,7 @@ export async function analyzeCropHealth(imageFile: File): Promise<CropHealthResp
     } catch (mockError) {
       return {
         success: false,
-        error: error instanceof Error ? error.message : 'Failed to analyze crop image'
+        error: sanitizeError(error)
       };
     }
   }
@@ -428,8 +461,8 @@ export async function saveCropHealthAnalysis(
   imageUrl: string,
   analysis: CropHealthAnalysis
 ): Promise<void> {
-  // TODO: Implement database save
+  logger.debug('Saving crop health analysis', { userId, imageUrl });
+  // TODO: Implement database save with proper validation
   // This would save to a 'crop_health_analyses' table
-  console.log('Saving crop health analysis:', { userId, imageUrl, analysis });
 }
 

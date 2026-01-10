@@ -1,4 +1,5 @@
 /**
+import { logger } from '@/lib/logger';
  * Certificate Generator Utilities
  */
 
@@ -302,7 +303,7 @@ export async function generatePDFCertificate(batchData: EnhancedBatchData): Prom
   const pdfBlob = doc.output('blob');
   return pdfBlob;
   } catch (error) {
-    console.error('Error generating PDF certificate:', error);
+    logger.error('Error generating PDF certificate:', error);
     throw new Error(`Failed to generate PDF certificate: ${error.message}`);
   }
 }
@@ -324,7 +325,7 @@ export async function downloadPDFCertificate(batchData: EnhancedBatchData, filen
     
     window.URL.revokeObjectURL(downloadUrl);
   } catch (error) {
-    console.error('Error downloading PDF certificate:', error);
+    logger.error('Error downloading PDF certificate:', error);
     throw new Error('Failed to download PDF certificate');
   }
 }

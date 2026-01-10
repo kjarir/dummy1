@@ -1,4 +1,5 @@
 import { supabase } from '@/integrations/supabase/client';
+import { logger } from '@/lib/logger';
 
 /**
  * Clean up grading field by removing supply chain data
@@ -54,9 +55,9 @@ export const cleanupGradingField = async (batchId: string): Promise<void> => {
       throw updateError;
     }
 
-    console.log(`Cleaned grading field for batch ${batchId}: "${cleanGrading}"`);
+    logger.debug(`Cleaned grading field for batch ${batchId}: "${cleanGrading}"`);
   } catch (error) {
-    console.error('Error cleaning grading field:', error);
+    logger.error('Error cleaning grading field:', error);
     throw new Error('Failed to clean grading field');
   }
 };
@@ -114,15 +115,15 @@ export const cleanupAllGradingFields = async (): Promise<void> => {
             .eq('id', batch.id);
 
           if (updateError) {
-            console.error(`Failed to clean batch ${batch.id}:`, updateError);
+            logger.error(`Failed to clean batch ${batch.id}:`, updateError);
           } else {
-            console.log(`Cleaned batch ${batch.id}: "${cleanGrading}"`);
+            logger.debug(`Cleaned batch ${batch.id}: "${cleanGrading}"`);
           }
         }
       }
     }
   } catch (error) {
-    console.error('Error cleaning all grading fields:', error);
+    logger.error('Error cleaning all grading fields:', error);
     throw new Error('Failed to clean all grading fields');
   }
 };

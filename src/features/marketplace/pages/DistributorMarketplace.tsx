@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { logger } from '@/lib/logger';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
 import { Button } from '@/components/ui/button';
@@ -53,7 +54,7 @@ export const DistributorMarketplace = () => {
         .order('created_at', { ascending: false });
 
       if (marketplaceError) {
-        console.error('Error fetching marketplace data:', marketplaceError);
+        logger.error('Error fetching marketplace data:', marketplaceError);
         // Fallback to direct batch fetch
         const { data: batchData, error: batchError } = await supabase
           .from('batches')
@@ -93,7 +94,7 @@ export const DistributorMarketplace = () => {
 
       setBatches(structuredData);
     } catch (error) {
-      console.error('Error fetching distributor batches:', error);
+      logger.error('Error fetching distributor batches:', error);
       setBatches([]);
     } finally {
       setLoading(false);

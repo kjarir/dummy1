@@ -12,6 +12,12 @@ export default defineConfig(({ mode }) => {
     server: {
       host: "::",
       port: 8080,
+      headers: {
+        'X-Content-Type-Options': 'nosniff',
+        'X-Frame-Options': 'DENY',
+        'X-XSS-Protection': '1; mode=block',
+        'Referrer-Policy': 'strict-origin-when-cross-origin',
+      },
       proxy: iotProxyTarget
         ? {
             "/api/iot-soil": {
@@ -27,6 +33,25 @@ export default defineConfig(({ mode }) => {
     resolve: {
       alias: {
         "@": path.resolve(__dirname, "./src"),
+      },
+    },
+    build: {
+      rollupOptions: {
+        output: {
+          manualChunks: {
+            'react-vendor': ['react', 'react-dom', 'react-router-dom'],
+            'ui-vendor': ['@tanstack/react-query'],
+            'blockchain-vendor': ['ethers', '@web3modal/ethers'],
+          },
+        },
+      },
+      sourcemap: mode === 'development',
+      minify: 'terser',
+      terserOptions: {
+        compress: {
+          drop_console: mode === 'production', // Remove console.logs in production
+          drop_debugger: true,
+        },
       },
     },
   };

@@ -1,4 +1,5 @@
 import { IPFSService } from '@/features/ipfs/utils/ipfs';
+import { logger } from '@/lib/logger';
 import { generatePDFCertificate, EnhancedBatchData } from '@/features/certificate/utils/certificateGenerator';
 import { getEnhancedBatchData } from '@/features/supply-chain/utils/supplyChainTracker';
 
@@ -27,9 +28,9 @@ export const updateExistingIPFSCertificate = async (
     // First, unpin the old file to clean up
     try {
       await ipfsService.unpinFile(existingIpfsHash);
-      console.log(`Unpinned old certificate: ${existingIpfsHash}`);
+      logger.debug(`Unpinned old certificate: ${existingIpfsHash}`);
     } catch (unpinError) {
-      console.warn('Failed to unpin old certificate:', unpinError);
+      logger.warn('Failed to unpin old certificate:', unpinError);
       // Continue anyway, as the old file will eventually expire
     }
     
@@ -49,10 +50,10 @@ export const updateExistingIPFSCertificate = async (
       }
     );
 
-    console.log(`Updated certificate: ${existingIpfsHash} -> ${pinataResponse.IpfsHash}`);
+    logger.debug(`Updated certificate: ${existingIpfsHash} -> ${pinataResponse.IpfsHash}`);
     return pinataResponse.IpfsHash;
   } catch (error) {
-    console.error('Error updating IPFS certificate:', error);
+    logger.error('Error updating IPFS certificate:', error);
     throw new Error('Failed to update IPFS certificate');
   }
 };
@@ -79,9 +80,9 @@ export const updateBatchWithNewIPFSHash = async (
       throw error;
     }
 
-    console.log(`Updated batch ${batchId} with new IPFS hash: ${newIpfsHash}`);
+    logger.debug(`Updated batch ${batchId} with new IPFS hash: ${newIpfsHash}`);
   } catch (error) {
-    console.error('Error updating batch with new IPFS hash:', error);
+    logger.error('Error updating batch with new IPFS hash:', error);
     throw new Error('Failed to update batch with new IPFS hash');
   }
 };
@@ -119,7 +120,7 @@ export const updateCertificateWithSupplyChain = async (
 
     return newIpfsHash;
   } catch (error) {
-    console.error('Error updating certificate with supply chain:', error);
+    logger.error('Error updating certificate with supply chain:', error);
     throw new Error('Failed to update certificate with supply chain data');
   }
 };

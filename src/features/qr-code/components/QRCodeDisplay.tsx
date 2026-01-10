@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { logger } from '@/lib/logger';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -72,7 +73,7 @@ export const QRCodeDisplay: React.FC<QRCodeDisplayProps> = ({
       };
 
       // Generate certificate QR code that opens the IPFS certificate directly
-      console.log('🔍 QR Code Debug:', { 
+      logger.debug('🔍 QR Code Debug:', { 
         ipfsHash, 
         groupId, 
         batchId,
@@ -85,20 +86,20 @@ export const QRCodeDisplay: React.FC<QRCodeDisplayProps> = ({
       
       if (ipfsHash && ipfsHash.trim() !== '') {
         certificateUrl = `https://gateway.pinata.cloud/ipfs/${ipfsHash}`;
-        console.log('✅ Using IPFS certificate URL:', certificateUrl);
+        logger.debug('✅ Using IPFS certificate URL:', certificateUrl);
       } else {
         // Fallback to verification URL if no IPFS hash
         certificateUrl = groupId 
           ? `${window.location.origin}/verify?batchId=${batchId}&groupId=${groupId}`
           : `${window.location.origin}/verify?batchId=${batchId}`;
-        console.log('⚠️ No IPFS hash found, using verification URL:', certificateUrl);
+        logger.debug('⚠️ No IPFS hash found, using verification URL:', certificateUrl);
       }
       
       const verificationQRCode = await generateQRCodeDataURL(certificateUrl);
 
       setVerificationQR(verificationQRCode);
     } catch (error) {
-      console.error('Error generating QR codes:', error);
+      logger.error('Error generating QR codes:', error);
       toast({
         variant: "destructive",
         title: "Error",

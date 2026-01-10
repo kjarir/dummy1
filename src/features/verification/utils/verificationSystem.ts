@@ -1,5 +1,7 @@
 import { supabase } from '@/integrations/supabase/client';
-import { singleStepGroupManager } from '@/features/ipfs/utils/singleStepGroupManager';
+import { ipfsManager } from '@/features/ipfs/utils/ipfsManager';
+import { logger } from '@/lib/logger';
+import { sanitizeError, sanitizeString } from '@/lib/security';
 
 export interface CertificateInfo {
   id: string;
@@ -9,7 +11,7 @@ export interface CertificateInfo {
   creationDate: string;
   fileId: string;
   type: 'harvest' | 'purchase';
-  metadata?: any;
+  metadata?: Record<string, unknown> | null;
 }
 
 export interface VerificationResult {
@@ -39,16 +41,26 @@ export class VerificationSystem {
    */
   public async verifyByBatchId(batchId: string): Promise<VerificationResult> {
     try {
-      console.log('🔍 Verifying by Batch ID:', batchId);
+      const sanitizedBatchId = sanitizeString(batchId, 100);
+      if (!sanitizedBatchId || !sanitizedBatchId.match(/^[0-9a-f-]{36}$/i) && !sanitizedBatchId.match(/^[0-9]+$/)) {
+        return {
+          success: false,
+          certificates: [],
+          error: 'Invalid batch ID format'
+        };
+      }
+
+      logger.debug('Verifying by Batch ID', { batchId: sanitizedBatchId });
       
       // Step 1: Get batch information from database
       const { data: batchData, error: batchError } = await supabase
         .from('batches')
         .select('*')
-        .eq('id', batchId)
-        .single();
+        .eq('id', sanitizedBatchId)
+        .maybeSingle();
 
       if (batchError || !batchData) {
+        logger.warn('Batch not found', { batchId: sanitizedBatchId, error: batchError?.message });
         return {
           success: false,
           certificates: [],
@@ -56,7 +68,7 @@ export class VerificationSystem {
         };
       }
 
-      console.log('✅ Batch found:', batchData);
+      logger.debug('Batch found', { batchId: sanitizedBatchId });
 
       // Step 2: Check if batch has group_id
       if (!batchData.group_id) {
@@ -103,11 +115,11 @@ export class VerificationSystem {
       return groupResult;
 
     } catch (error) {
-      console.error('Error verifying by batch ID:', error);
+      logger.error('Error verifying by batch ID', error);
       return {
         success: false,
         certificates: [],
-        error: `Verification failed: ${error.message}`
+        error: `Verification failed: ${sanitizeError(error)}`
       };
     }
   }
@@ -117,12 +129,22 @@ export class VerificationSystem {
    */
   public async verifyByGroupId(groupId: string): Promise<VerificationResult> {
     try {
-      console.log('🔍 Verifying by Group ID:', groupId);
+      const sanitizedGroupId = sanitizeString(groupId, 100);
+      if (!sanitizedGroupId) {
+        return {
+          success: false,
+          certificates: [],
+          error: 'Invalid group ID format'
+        };
+      }
+
+      logger.debug('Verifying by Group ID', { groupId: sanitizedGroupId });
       
       // Step 1: Get group information from Pinata
-      const groupInfo = await singleStepGroupManager.getGroupInfo(groupId);
+      const groupInfo = await ipfsManager.getGroupInfo(sanitizedGroupId);
       
       if (!groupInfo) {
+        logger.warn('Group not found', { groupId: sanitizedGroupId });
         return {
           success: false,
           certificates: [],
@@ -130,24 +152,24 @@ export class VerificationSystem {
         };
       }
 
-      console.log('✅ Group found:', groupInfo);
+      logger.debug('Group found', { groupId: sanitizedGroupId, name: groupInfo.name });
 
       // Step 2: Get certificates from the group
-      const certificates = await this.getGroupCertificates(groupId);
+      const certificates = await this.getGroupCertificates(sanitizedGroupId);
       
       return {
         success: true,
-        groupId: groupId,
-        groupName: groupInfo.name,
+        groupId: sanitizedGroupId,
+        groupName: groupInfo.name || 'Unknown',
         certificates: certificates
       };
 
     } catch (error) {
-      console.error('Error verifying by group ID:', error);
+      logger.error('Error verifying by group ID', error);
       return {
         success: false,
         certificates: [],
-        error: `Group verification failed: ${error.message}`
+        error: `Group verification failed: ${sanitizeError(error)}`
       };
     }
   }
@@ -158,42 +180,58 @@ export class VerificationSystem {
    */
   public async getGroupCertificates(groupId: string): Promise<CertificateInfo[]> {
     try {
-      console.log('🔍 Fetching certificates for group from database:', groupId);
+      const sanitizedGroupId = sanitizeString(groupId, 100);
+      if (!sanitizedGroupId) {
+        return [];
+      }
+
+      logger.debug('Fetching certificates for group from database', { groupId: sanitizedGroupId });
       
       // Query our database for files associated with this group
       const { data: files, error } = await supabase
         .from('group_files')
         .select('*')
-        .eq('group_id', groupId)
+        .eq('group_id', sanitizedGroupId)
         .order('created_at', { ascending: true });
 
       if (error) {
-        console.warn('No group_files table found or error querying:', error);
+        logger.warn('Error querying group_files', { error: error.message, groupId: sanitizedGroupId });
         return [];
       }
 
       if (!files || files.length === 0) {
-        console.log('No files found for group in database');
+        logger.debug('No files found for group', { groupId: sanitizedGroupId });
         return [];
       }
 
       // Convert database records to CertificateInfo format
-      const certificates: CertificateInfo[] = files.map((file: any) => ({
-        id: file.id,
-        name: file.file_name,
-        cid: file.ipfs_hash,
-        size: file.file_size || 0,
-        creationDate: file.created_at,
-        fileId: file.pinata_file_id || file.id,
-        type: file.transaction_type === 'HARVEST' ? 'harvest' : 'purchase',
-        metadata: file.metadata ? JSON.parse(file.metadata) : null
-      }));
+      const certificates: CertificateInfo[] = files.map((file) => {
+        let metadata = null;
+        if (file.metadata) {
+          try {
+            metadata = typeof file.metadata === 'string' ? JSON.parse(file.metadata) : file.metadata;
+          } catch (e) {
+            logger.warn('Failed to parse metadata', { fileId: file.id });
+          }
+        }
 
-      console.log(`✅ Found ${certificates.length} certificates for group ${groupId}`);
+        return {
+          id: file.id,
+          name: file.file_name || 'Unknown',
+          cid: file.ipfs_hash || '',
+          size: file.file_size || 0,
+          creationDate: file.created_at || new Date().toISOString(),
+          fileId: file.pinata_file_id || file.id,
+          type: file.transaction_type === 'HARVEST' ? 'harvest' : 'purchase',
+          metadata: metadata
+        };
+      });
+
+      logger.debug('Found certificates for group', { groupId: sanitizedGroupId, count: certificates.length });
       return certificates;
 
     } catch (error) {
-      console.error('Error fetching group certificates:', error);
+      logger.error('Error fetching group certificates', error);
       return [];
     }
   }
@@ -202,7 +240,7 @@ export class VerificationSystem {
    * Download a certificate by its CID
    */
   public getCertificateUrl(cid: string): string {
-    return `https://gateway.pinata.cloud/ipfs/${cid}`;
+    return ipfsManager.getCertificateUrl(cid);
   }
 
   /**
@@ -225,7 +263,7 @@ export class VerificationSystem {
       URL.revokeObjectURL(downloadUrl);
       
     } catch (error) {
-      console.error('Error downloading certificate:', error);
+      logger.error('Error downloading certificate:', error);
       throw new Error(`Failed to download certificate: ${error.message}`);
     }
   }

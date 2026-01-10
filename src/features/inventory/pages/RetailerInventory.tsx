@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { logger } from '@/lib/logger';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
 import { Button } from '@/components/ui/button';
@@ -34,7 +35,7 @@ export const RetailerInventory = () => {
     try {
       setLoading(true);
       
-      console.log('🔍 DEBUG: Fetching retailer inventory for profile ID:', profile?.id);
+      logger.debug('🔍 DEBUG: Fetching retailer inventory for profile ID:', profile?.id);
       
       // First, get the retailer inventory records
       const { data: inventoryData, error: inventoryError } = await supabase
@@ -44,22 +45,22 @@ export const RetailerInventory = () => {
         .order('created_at', { ascending: false });
 
       if (inventoryError) {
-        console.error('❌ Error fetching retailer inventory:', inventoryError);
+        logger.error('❌ Error fetching retailer inventory:', inventoryError);
         setInventory([]);
         return;
       }
 
-      console.log('🔍 DEBUG: Raw retailer inventory data:', inventoryData);
+      logger.debug('🔍 DEBUG: Raw retailer inventory data:', inventoryData);
 
       if (!inventoryData || inventoryData.length === 0) {
-        console.log('🔍 DEBUG: No inventory records found');
+        logger.debug('🔍 DEBUG: No inventory records found');
         setInventory([]);
         return;
       }
 
       // Get marketplace IDs from inventory records
       const marketplaceIds = inventoryData.map(item => item.marketplace_id);
-      console.log('🔍 DEBUG: Marketplace IDs:', marketplaceIds);
+      logger.debug('🔍 DEBUG: Marketplace IDs:', marketplaceIds);
 
       // Fetch marketplace data
       const { data: marketplaceData, error: marketplaceError } = await supabase
@@ -68,16 +69,16 @@ export const RetailerInventory = () => {
         .in('id', marketplaceIds);
 
       if (marketplaceError) {
-        console.error('❌ Error fetching marketplace data:', marketplaceError);
+        logger.error('❌ Error fetching marketplace data:', marketplaceError);
         setInventory([]);
         return;
       }
 
-      console.log('🔍 DEBUG: Marketplace data:', marketplaceData);
+      logger.debug('🔍 DEBUG: Marketplace data:', marketplaceData);
 
       // Get batch IDs from marketplace data
       const batchIds = marketplaceData?.map(item => item.batch_id) || [];
-      console.log('🔍 DEBUG: Batch IDs:', batchIds);
+      logger.debug('🔍 DEBUG: Batch IDs:', batchIds);
 
       // Fetch batch data
       const { data: batchData, error: batchError } = await supabase
@@ -86,12 +87,12 @@ export const RetailerInventory = () => {
         .in('id', batchIds);
 
       if (batchError) {
-        console.error('❌ Error fetching batch data:', batchError);
+        logger.error('❌ Error fetching batch data:', batchError);
         setInventory([]);
         return;
       }
 
-      console.log('🔍 DEBUG: Batch data:', batchData);
+      logger.debug('🔍 DEBUG: Batch data:', batchData);
 
       // Get transactions to find who the retailer bought FROM (not current seller)
       // We need to find the PURCHASE/RETAIL transaction where retailer is the buyer
@@ -102,7 +103,7 @@ export const RetailerInventory = () => {
         .in('type', ['PURCHASE', 'RETAIL'])
         .in('batch_id', batchIds);
 
-      console.log('🔍 DEBUG: Purchase transactions for retailer:', purchaseTransactions);
+      logger.debug('🔍 DEBUG: Purchase transactions for retailer:', purchaseTransactions);
 
       // Get seller IDs from transactions (who they bought FROM)
       const sellerIds = purchaseTransactions?.map(tx => tx.from_address).filter(Boolean) || [];
@@ -111,9 +112,9 @@ export const RetailerInventory = () => {
       const currentOwnerIds = batchData?.map(b => b.current_owner).filter(Boolean) || [];
       const allProfileIds = [...new Set([...sellerIds, ...currentOwnerIds])];
       
-      console.log('🔍 DEBUG: Seller IDs from transactions:', sellerIds);
-      console.log('🔍 DEBUG: Current owner IDs from batches:', currentOwnerIds);
-      console.log('🔍 DEBUG: All profile IDs to fetch:', allProfileIds);
+      logger.debug('🔍 DEBUG: Seller IDs from transactions:', sellerIds);
+      logger.debug('🔍 DEBUG: Current owner IDs from batches:', currentOwnerIds);
+      logger.debug('🔍 DEBUG: All profile IDs to fetch:', allProfileIds);
 
       // Fetch seller profiles
       const { data: sellerProfiles, error: sellerError } = await supabase
@@ -122,11 +123,11 @@ export const RetailerInventory = () => {
         .in('id', allProfileIds.length > 0 ? allProfileIds : ['00000000-0000-0000-0000-000000000000']); // Dummy ID if empty
 
       if (sellerError) {
-        console.error('❌ Error fetching seller profiles:', sellerError);
+        logger.error('❌ Error fetching seller profiles:', sellerError);
         // Don't fail, just continue without seller profiles
       }
 
-      console.log('🔍 DEBUG: Seller profiles:', sellerProfiles);
+      logger.debug('🔍 DEBUG: Seller profiles:', sellerProfiles);
 
       // Combine the data
       const combinedData = inventoryData.map(inventoryItem => {
@@ -159,10 +160,10 @@ export const RetailerInventory = () => {
         };
       });
 
-      console.log('🔍 DEBUG: Combined inventory data:', combinedData);
+      logger.debug('🔍 DEBUG: Combined inventory data:', combinedData);
       setInventory(combinedData || []);
     } catch (error) {
-      console.error('❌ Error fetching inventory:', error);
+      logger.error('❌ Error fetching inventory:', error);
       setInventory([]);
     } finally {
       setLoading(false);
@@ -182,9 +183,9 @@ export const RetailerInventory = () => {
             .single();
           
           currentOwnerProfile = ownerProfile;
-          console.log('🔍 DEBUG: Fetched current owner profile:', currentOwnerProfile);
+          logger.debug('🔍 DEBUG: Fetched current owner profile:', currentOwnerProfile);
         } catch (ownerError) {
-          console.warn('Could not fetch current owner profile:', ownerError);
+          logger.warn('Could not fetch current owner profile:', ownerError);
         }
       }
       
@@ -200,14 +201,14 @@ export const RetailerInventory = () => {
         profiles: currentOwnerProfile || item.batch?.current_owner_profile || item.seller, // ALWAYS use current owner
       };
       
-      console.log('🔍 DEBUG: Batch data for modal:', batchData);
-      console.log('🔍 DEBUG: Current owner ID:', item.batch?.current_owner);
-      console.log('🔍 DEBUG: Current owner profile:', currentOwnerProfile);
+      logger.debug('🔍 DEBUG: Batch data for modal:', batchData);
+      logger.debug('🔍 DEBUG: Current owner ID:', item.batch?.current_owner);
+      logger.debug('🔍 DEBUG: Current owner profile:', currentOwnerProfile);
       
       setSelectedBatch(batchData);
       setIsDetailsModalOpen(true);
     } catch (error) {
-      console.error('Error preparing batch details:', error);
+      logger.error('Error preparing batch details:', error);
       // Fallback
     const batchData = {
         ...item.marketplace,

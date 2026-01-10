@@ -1,0 +1,273 @@
+import { supabase } from '@/integrations/supabase/client';
+import { ipfsManager } from '@/features/ipfs/utils/ipfsManager';
+import { logger } from '@/lib/logger';
+import { sanitizeError, sanitizeString } from '@/lib/security';
+
+export interface CertificateInfo {
+  id: string;
+  name: string;
+  cid: string;
+  size: number;
+  creationDate: string;
+  fileId: string;
+  type: 'harvest' | 'purchase';
+  metadata?: Record<string, unknown> | null;
+}
+
+export interface VerificationResult {
+  success: boolean;
+  batchId?: string;
+  groupId?: string;
+  groupName?: string;
+  certificates: CertificateInfo[];
+  batchInfo?: {
+    farmerName: string;
+    cropType: string;
+    variety: string;
+    harvestQuantity: number;
+    harvestDate: string;
+    grading: string;
+    certification: string;
+    pricePerKg: number;
+    status: string;
+  };
+  error?: string;
+}
+
+export class VerificationSystem {
+  
+  /**
+   * Verify using Batch ID - fetches group ID from database and then gets certificates
+   */
+  public async verifyByBatchId(batchId: string): Promise<VerificationResult> {
+    try {
+      const sanitizedBatchId = sanitizeString(batchId, 100);
+      if (!sanitizedBatchId || !sanitizedBatchId.match(/^[0-9a-f-]{36}$/i) && !sanitizedBatchId.match(/^[0-9]+$/)) {
+        return {
+          success: false,
+          certificates: [],
+          error: 'Invalid batch ID format'
+        };
+      }
+
+      logger.debug('Verifying by Batch ID', { batchId: sanitizedBatchId });
+      
+      // Step 1: Get batch information from database
+      const { data: batchData, error: batchError } = await supabase
+        .from('batches')
+        .select('*')
+        .eq('id', sanitizedBatchId)
+        .maybeSingle();
+
+      if (batchError || !batchData) {
+        logger.warn('Batch not found', { batchId: sanitizedBatchId, error: batchError?.message });
+        return {
+          success: false,
+          certificates: [],
+          error: 'Batch not found in database'
+        };
+      }
+
+      logger.debug('Batch found', { batchId: sanitizedBatchId });
+
+      // Step 2: Check if batch has group_id
+      if (!batchData.group_id) {
+        return {
+          success: false,
+          batchId: batchId,
+          certificates: [],
+          batchInfo: {
+            farmerName: batchData.farmer_name || 'Unknown',
+            cropType: batchData.crop_type || 'Unknown',
+            variety: batchData.variety || 'Unknown',
+            harvestQuantity: batchData.harvest_quantity || 0,
+            harvestDate: batchData.harvest_date || '',
+            grading: batchData.grading || 'Unknown',
+            certification: batchData.certification || 'Unknown',
+            pricePerKg: batchData.price_per_kg || 0,
+            status: batchData.status || 'Unknown'
+          },
+          error: 'Batch does not have a group ID - no certificates available'
+        };
+      }
+
+      // Step 3: Get group information and certificates
+      const groupResult = await this.verifyByGroupId(batchData.group_id);
+      
+      if (groupResult.success) {
+        return {
+          ...groupResult,
+          batchId: batchId,
+          batchInfo: {
+            farmerName: batchData.farmer_name || 'Unknown',
+            cropType: batchData.crop_type || 'Unknown',
+            variety: batchData.variety || 'Unknown',
+            harvestQuantity: batchData.harvest_quantity || 0,
+            harvestDate: batchData.harvest_date || '',
+            grading: batchData.grading || 'Unknown',
+            certification: batchData.certification || 'Unknown',
+            pricePerKg: batchData.price_per_kg || 0,
+            status: batchData.status || 'Unknown'
+          }
+        };
+      }
+
+      return groupResult;
+
+    } catch (error) {
+      logger.error('Error verifying by batch ID', error);
+      return {
+        success: false,
+        certificates: [],
+        error: `Verification failed: ${sanitizeError(error)}`
+      };
+    }
+  }
+
+  /**
+   * Verify using Group ID - directly fetches certificates from Pinata
+   */
+  public async verifyByGroupId(groupId: string): Promise<VerificationResult> {
+    try {
+      const sanitizedGroupId = sanitizeString(groupId, 100);
+      if (!sanitizedGroupId) {
+        return {
+          success: false,
+          certificates: [],
+          error: 'Invalid group ID format'
+        };
+      }
+
+      logger.debug('Verifying by Group ID', { groupId: sanitizedGroupId });
+      
+      // Step 1: Get group information from Pinata
+      const groupInfo = await ipfsManager.getGroupInfo(sanitizedGroupId);
+      
+      if (!groupInfo) {
+        logger.warn('Group not found', { groupId: sanitizedGroupId });
+        return {
+          success: false,
+          certificates: [],
+          error: 'Group not found in Pinata'
+        };
+      }
+
+      logger.debug('Group found', { groupId: sanitizedGroupId, name: groupInfo.name });
+
+      // Step 2: Get certificates from the group
+      const certificates = await this.getGroupCertificates(sanitizedGroupId);
+      
+      return {
+        success: true,
+        groupId: sanitizedGroupId,
+        groupName: groupInfo.name || 'Unknown',
+        certificates: certificates
+      };
+
+    } catch (error) {
+      logger.error('Error verifying by group ID', error);
+      return {
+        success: false,
+        certificates: [],
+        error: `Group verification failed: ${sanitizeError(error)}`
+      };
+    }
+  }
+
+  /**
+   * Get certificates for a group from our database
+   * We'll track file references when they're uploaded to groups
+   */
+  public async getGroupCertificates(groupId: string): Promise<CertificateInfo[]> {
+    try {
+      const sanitizedGroupId = sanitizeString(groupId, 100);
+      if (!sanitizedGroupId) {
+        return [];
+      }
+
+      logger.debug('Fetching certificates for group from database', { groupId: sanitizedGroupId });
+      
+      // Query our database for files associated with this group
+      const { data: files, error } = await supabase
+        .from('group_files')
+        .select('*')
+        .eq('group_id', sanitizedGroupId)
+        .order('created_at', { ascending: true });
+
+      if (error) {
+        logger.warn('Error querying group_files', { error: error.message, groupId: sanitizedGroupId });
+        return [];
+      }
+
+      if (!files || files.length === 0) {
+        logger.debug('No files found for group', { groupId: sanitizedGroupId });
+        return [];
+      }
+
+      // Convert database records to CertificateInfo format
+      const certificates: CertificateInfo[] = files.map((file) => {
+        let metadata = null;
+        if (file.metadata) {
+          try {
+            metadata = typeof file.metadata === 'string' ? JSON.parse(file.metadata) : file.metadata;
+          } catch (e) {
+            logger.warn('Failed to parse metadata', { fileId: file.id });
+          }
+        }
+
+        return {
+          id: file.id,
+          name: file.file_name || 'Unknown',
+          cid: file.ipfs_hash || '',
+          size: file.file_size || 0,
+          creationDate: file.created_at || new Date().toISOString(),
+          fileId: file.pinata_file_id || file.id,
+          type: file.transaction_type === 'HARVEST' ? 'harvest' : 'purchase',
+          metadata: metadata
+        };
+      });
+
+      logger.debug('Found certificates for group', { groupId: sanitizedGroupId, count: certificates.length });
+      return certificates;
+
+    } catch (error) {
+      logger.error('Error fetching group certificates', error);
+      return [];
+    }
+  }
+
+  /**
+   * Download a certificate by its CID
+   */
+  public getCertificateUrl(cid: string): string {
+    return ipfsManager.getCertificateUrl(cid);
+  }
+
+  /**
+   * Download a certificate file
+   */
+  public async downloadCertificate(cid: string, fileName: string): Promise<void> {
+    try {
+      const url = this.getCertificateUrl(cid);
+      const response = await fetch(url);
+      const blob = await response.blob();
+      
+      // Create download link
+      const downloadUrl = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = downloadUrl;
+      link.download = fileName;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(downloadUrl);
+      
+    } catch (error) {
+      console.error('Error downloading certificate:', error);
+      throw new Error(`Failed to download certificate: ${error.message}`);
+    }
+  }
+}
+
+// Export singleton instance
+export const verificationSystem = new VerificationSystem();

@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { logger } from '@/lib/logger';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -74,7 +75,7 @@ export const VerificationSystem: React.FC = () => {
         }
       }
     } catch (error) {
-      console.error('Search error:', error);
+      logger.error('Search error:', error);
       toast({
         variant: "destructive",
         title: "Search Failed",
@@ -107,7 +108,7 @@ export const VerificationSystem: React.FC = () => {
         description: "Your certificate has been downloaded successfully.",
       });
     } catch (error) {
-      console.error('Error downloading certificate:', error);
+      logger.error('Error downloading certificate:', error);
       toast({
         variant: "destructive",
         title: "Download Failed",

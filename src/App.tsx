@@ -9,6 +9,7 @@ import { Web3Provider } from "@/features/blockchain/contexts/Web3Context";
 import { Header } from "./components/layout/Header";
 import { Footer } from "./components/layout/Footer";
 import { ProtectedRoute } from "./components/ProtectedRoute";
+import { ErrorBoundary } from "./components/ErrorBoundary";
 
 const Landing = lazy(() => import("./pages/Landing").then(m => ({ default: m.Landing })));
 const Login = lazy(() => import("./pages/Auth/Login").then(m => ({ default: m.Login })));
@@ -26,7 +27,10 @@ const CropHealthDetection = lazy(() => import("./features/ai-services/pages/Crop
 const BatchRegistration = lazy(() => import("./features/batch-registration/pages/BatchRegistration").then(m => ({ default: m.BatchRegistration })));
 const Admin = lazy(() => import("./pages/Admin").then(m => ({ default: m.Admin })));
 const Unauthorized = lazy(() => import("./pages/Unauthorized").then(m => ({ default: m.Unauthorized })));
-const TestPage = lazy(() => import("./pages/TestPage").then(m => ({ default: m.TestPage })));
+// TestPage removed from production build - only available in development
+const TestPage = import.meta.env.DEV 
+  ? lazy(() => import("./pages/TestPage").then(m => ({ default: m.TestPage })))
+  : null;
 const UnifiedVerificationSystem = lazy(() => import("./features/verification/components/UnifiedVerificationSystem").then(m => ({ default: m.UnifiedVerificationSystem })));
 const HelperDesk = lazy(() => import("./pages/HelperDesk"));
 const Index = lazy(() => import("./pages/Index"));
@@ -53,8 +57,9 @@ const App = () => (
             <div className="min-h-screen flex flex-col">
               <Header />
               <main className="flex-1">
-                <Suspense fallback={<div className="flex justify-center py-10 text-sm text-muted-foreground">Loading...</div>}>
-                  <Routes>
+                <ErrorBoundary>
+                  <Suspense fallback={<div className="flex justify-center py-10 text-sm text-muted-foreground">Loading...</div>}>
+                    <Routes>
                     <Route path="/" element={<Landing />} />
                     <Route path="/login" element={<Login />} />
                     <Route path="/signup" element={<Signup />} />
@@ -150,11 +155,12 @@ const App = () => (
                       </ProtectedRoute>
                     } />
                     
-                    <Route path="/test" element={<TestPage />} />
-                    <Route path="/about" element={<Index />} />
-                    <Route path="*" element={<NotFound />} />
-                  </Routes>
-                </Suspense>
+                      {import.meta.env.DEV && TestPage && <Route path="/test" element={<TestPage />} />}
+                      <Route path="/about" element={<Index />} />
+                      <Route path="*" element={<NotFound />} />
+                    </Routes>
+                  </Suspense>
+                </ErrorBoundary>
               </main>
               <Footer />
             </div>

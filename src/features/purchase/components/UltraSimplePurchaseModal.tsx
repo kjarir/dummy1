@@ -9,7 +9,9 @@ import { useToast } from '@/components/ui/use-toast';
 import { useAuth } from '@/contexts/AuthContext';
 import { supabase } from '@/integrations/supabase/client';
 import { purchaseTransactionCreator } from '@/features/blockchain/utils/purchaseTransactionCreator';
-import { singleStepGroupManager } from '@/features/ipfs/utils/singleStepGroupManager';
+import { ipfsManager } from '@/features/ipfs/utils/ipfsManager';
+import { logger } from '@/lib/logger';
+import { sanitizeError, sanitizeString } from '@/lib/security';
 import { blockchainTransactionManager } from '@/features/blockchain/utils/blockchainTransactionManager';
 import { useWeb3 } from '@/features/blockchain/contexts/Web3Context';
 import { 
@@ -21,7 +23,32 @@ import {
 } from 'lucide-react';
 
 interface UltraSimplePurchaseModalProps {
-  batch: any;
+  batch: Record<string, unknown> & {
+    id?: string | number;
+    batch_id?: string;
+    batches?: Record<string, unknown> & {
+      id?: string;
+      crop_type?: string;
+      variety?: string;
+      quantity?: number;
+      harvest_quantity?: number;
+      price_per_kg?: number;
+      group_id?: string;
+      current_owner?: string;
+      profiles?: Record<string, unknown> & { full_name?: string };
+    };
+    profiles?: Record<string, unknown> & { full_name?: string; wallet_address?: string };
+    price?: number;
+    price_per_kg?: number;
+    quantity?: number;
+    harvest_quantity?: number;
+    crop_type?: string;
+    variety?: string;
+    current_owner?: string;
+    current_seller_id?: string;
+    farmer_id?: string;
+    group_id?: string;
+  };
   isOpen: boolean;
   onClose: () => void;
   onPurchaseComplete: () => void;
@@ -49,14 +76,13 @@ export const UltraSimplePurchaseModal: React.FC<UltraSimplePurchaseModalProps> =
       return;
     }
 
-    console.log('🔍 DEBUG: Starting purchase with profile:', profile);
-    console.log('🔍 DEBUG: Profile user_type:', profile?.user_type);
-    console.log('🔍 DEBUG: Profile full_name:', profile?.full_name);
-    console.log('🔍 DEBUG: All profile fields:', Object.keys(profile || {}));
-    console.log('🔍 DEBUG: Batch object:', batch);
-    console.log('🔍 DEBUG: Batch keys:', Object.keys(batch || {}));
-    console.log('🔍 DEBUG: Batch batch_id:', batch?.batch_id);
-    console.log('🔍 DEBUG: Batch id:', batch?.id);
+    logger.debug('Starting purchase', { 
+      profileId: profile?.id, 
+      userType: profile?.user_type,
+      batchId: batch?.id,
+      batchIdKey: batch?.batch_id,
+      batchKeys: Object.keys(batch || {})
+    });
 
     if (!address.trim()) {
       toast({
@@ -68,27 +94,22 @@ export const UltraSimplePurchaseModal: React.FC<UltraSimplePurchaseModalProps> =
     }
 
     try {
-      console.log('🔍 DEBUG: Price calculation inputs:', {
+      logger.debug('Price calculation inputs', {
         batchPrice: batch.price,
         batchQuantity: batch.quantity,
-        requestedQuantity: quantity,
-        batchObject: batch
+        requestedQuantity: quantity
       });
-      
-      console.log('🔍 DEBUG: Complete batch object structure:', JSON.stringify(batch, null, 2));
-      console.log('🔍 DEBUG: Batch object keys:', Object.keys(batch));
-      console.log('🔍 DEBUG: Batch object values:', Object.values(batch));
       
       // Try to get price and quantity from different possible sources
       // Based on the actual batch object structure, use price_per_kg and harvest_quantity
       const batchPrice = batch.price_per_kg || batch.price || batch.batches?.price_per_kg || batch.batches?.price || batch.batches?.total_price;
       const batchQuantity = batch.harvest_quantity || batch.quantity || batch.batches?.harvest_quantity || batch.batches?.quantity;
       
-      console.log('🔍 DEBUG: Price and quantity fallback:', {
+      logger.debug('Price and quantity resolved', {
         batchPrice,
         batchQuantity,
-        batchPriceSource: batch.price ? 'batch.price' : batch.batches?.price ? 'batch.batches.price' : batch.batches?.price_per_kg ? 'batch.batches.price_per_kg' : batch.batches?.total_price ? 'batch.batches.total_price' : 'none',
-        batchQuantitySource: batch.quantity ? 'batch.quantity' : batch.batches?.quantity ? 'batch.batches.quantity' : batch.batches?.harvest_quantity ? 'batch.batches.harvest_quantity' : 'none'
+        priceSource: batch.price ? 'batch.price' : batch.batches?.price_per_kg ? 'batch.batches.price_per_kg' : 'fallback',
+        quantitySource: batch.quantity ? 'batch.quantity' : batch.batches?.harvest_quantity ? 'batch.batches.harvest_quantity' : 'fallback'
       });
       
       // Use marketplace price and quantity directly
@@ -102,7 +123,7 @@ export const UltraSimplePurchaseModal: React.FC<UltraSimplePurchaseModalProps> =
         throw new Error(`Invalid price or quantity: price=${batchPrice}, quantity=${batchQuantity}`);
       }
       
-      console.log('🔍 DEBUG: Price calculation results:', {
+      logger.debug('Price calculation results', {
         unitPrice,
         totalPrice,
         deliveryFee,
@@ -115,7 +136,7 @@ export const UltraSimplePurchaseModal: React.FC<UltraSimplePurchaseModalProps> =
       }
 
       // Use the new purchase function
-      console.log('🔍 DEBUG: Purchasing from marketplace...');
+      logger.debug('Processing marketplace purchase');
       
       // Get the correct batch ID for database updates (this should be the batch UUID)
       // Priority: batches.id (nested) > batch_id > id (but only if it's a UUID, not marketplace integer ID)
@@ -133,7 +154,7 @@ export const UltraSimplePurchaseModal: React.FC<UltraSimplePurchaseModalProps> =
         }
       }
       
-      console.log('🔍 DEBUG: Batch ID determination:', {
+      logger.debug('🔍 DEBUG: Batch ID determination:', {
         'batch.batches?.id': batch.batches?.id,
         'batch.batch_id': batch.batch_id,
         'batch.id': batch.id,
@@ -157,10 +178,10 @@ export const UltraSimplePurchaseModal: React.FC<UltraSimplePurchaseModalProps> =
           .single();
         
         marketplaceId = marketplaceRecord?.id;
-        console.log('🔍 DEBUG: Found marketplace record:', marketplaceRecord);
-        console.log('🔍 DEBUG: Using marketplace ID for inventory:', marketplaceId);
+        logger.debug('🔍 DEBUG: Found marketplace record:', marketplaceRecord);
+        logger.debug('🔍 DEBUG: Using marketplace ID for inventory:', marketplaceId);
       } catch (error) {
-        console.warn('🔍 DEBUG: Could not find marketplace record for batch:', batchId, error);
+        logger.warn('🔍 DEBUG: Could not find marketplace record for batch:', batchId, error);
       }
       
       if (!batchId) {
@@ -168,14 +189,14 @@ export const UltraSimplePurchaseModal: React.FC<UltraSimplePurchaseModalProps> =
       }
       
       if (!marketplaceId) {
-        console.warn('🔍 DEBUG: No marketplace ID found, skipping inventory creation');
+        logger.warn('🔍 DEBUG: No marketplace ID found, skipping inventory creation');
       }
 
       // Get current marketplace quantity before purchase
       let currentMarketplaceQuantity = batch.quantity || batch.batches?.quantity || batch.batches?.harvest_quantity || 0;
       const remainingQuantity = currentMarketplaceQuantity - quantity;
       
-      console.log('🔍 DEBUG: Quantity calculation:', {
+      logger.debug('🔍 DEBUG: Quantity calculation:', {
         currentQuantity: currentMarketplaceQuantity,
         purchaseQuantity: quantity,
         remainingQuantity: remainingQuantity,
@@ -186,7 +207,7 @@ export const UltraSimplePurchaseModal: React.FC<UltraSimplePurchaseModalProps> =
 
       // Update the batch ownership directly - use the actual batch UUID
       // batchId should be the UUID from batches table, not marketplace ID
-      console.log('🔍 DEBUG: Updating batch ownership:', {
+      logger.debug('🔍 DEBUG: Updating batch ownership:', {
         batchId,
         newOwner: profile?.id,
         newOwnerName: profile?.full_name,
@@ -197,7 +218,7 @@ export const UltraSimplePurchaseModal: React.FC<UltraSimplePurchaseModalProps> =
       
       // Get the current owner BEFORE update (this is the seller)
       const sellerId = batch.batches?.current_owner || batch.current_owner || batch.farmer_id || batch.batches?.farmer_id;
-      console.log('🔍 DEBUG: Seller ID (current owner before purchase):', sellerId);
+      logger.debug('🔍 DEBUG: Seller ID (current owner before purchase):', sellerId);
       
       const { data: updatedBatch, error: updateError } = await supabase
         .from('batches')
@@ -210,12 +231,12 @@ export const UltraSimplePurchaseModal: React.FC<UltraSimplePurchaseModalProps> =
         .single();
 
       if (updateError) {
-        console.error('❌ Batch ownership update failed:', updateError);
+        logger.error('❌ Batch ownership update failed:', updateError);
         throw new Error(`Purchase failed: ${updateError.message}`);
       }
 
       if (updatedBatch) {
-        console.log('✅ Batch ownership updated successfully:', {
+        logger.debug('✅ Batch ownership updated successfully:', {
           batchId: updatedBatch.id,
           oldOwner: sellerId,
           newOwner: updatedBatch.current_owner,
@@ -226,17 +247,23 @@ export const UltraSimplePurchaseModal: React.FC<UltraSimplePurchaseModalProps> =
         
         // Verify the update actually worked
         if (updatedBatch.current_owner !== profile?.id) {
-          console.error('❌ CRITICAL: Ownership update did not match! Expected:', profile?.id, 'Got:', updatedBatch.current_owner);
+          logger.error('❌ CRITICAL: Ownership update did not match! Expected:', profile?.id, 'Got:', updatedBatch.current_owner);
           throw new Error('Ownership update verification failed. Please try again.');
         }
       } else {
-        console.warn('⚠️ Batch update returned no data - ownership may not have updated');
+        logger.warn('⚠️ Batch update returned no data - ownership may not have updated');
         throw new Error('Batch update returned no data');
       }
 
       // Update marketplace quantity and status
       // If all quantity is purchased, mark as sold, otherwise reduce quantity
-      const marketplaceUpdateData: any = {
+      interface MarketplaceUpdateData {
+        current_seller_id?: string;
+        current_seller_type?: string;
+        status?: string;
+        quantity?: number;
+      }
+      const marketplaceUpdateData: MarketplaceUpdateData = {
         current_seller_id: profile?.id,
         current_seller_type: profile?.user_type || (profile?.full_name?.toLowerCase().includes('distributor') ? 'distributor' : 'retailer')
       };
@@ -245,12 +272,12 @@ export const UltraSimplePurchaseModal: React.FC<UltraSimplePurchaseModalProps> =
         // All quantity sold - mark as sold
         marketplaceUpdateData.status = 'sold';
         marketplaceUpdateData.quantity = 0;
-        console.log('🔍 DEBUG: All quantity purchased, marking marketplace as sold');
+        logger.debug('🔍 DEBUG: All quantity purchased, marking marketplace as sold');
       } else {
         // Reduce quantity, keep as available
         marketplaceUpdateData.status = 'available';
         marketplaceUpdateData.quantity = remainingQuantity;
-        console.log('🔍 DEBUG: Reducing marketplace quantity to:', remainingQuantity);
+        logger.debug('🔍 DEBUG: Reducing marketplace quantity to:', remainingQuantity);
       }
 
       // Find marketplace record by batch_id (not batch.id which might be marketplace ID)
@@ -260,7 +287,7 @@ export const UltraSimplePurchaseModal: React.FC<UltraSimplePurchaseModalProps> =
         .eq('batch_id', batchId);
 
       if (marketplaceError) {
-        console.warn('Failed to update marketplace:', marketplaceError);
+        logger.warn('Failed to update marketplace:', marketplaceError);
         // Try alternative: update by marketplace ID if batch.id is marketplace ID
         if (batch.id && typeof batch.id === 'number') {
           const { error: altMarketplaceError } = await supabase
@@ -269,19 +296,19 @@ export const UltraSimplePurchaseModal: React.FC<UltraSimplePurchaseModalProps> =
             .eq('id', batch.id);
           
           if (altMarketplaceError) {
-            console.warn('Failed to update marketplace by ID:', altMarketplaceError);
+            logger.warn('Failed to update marketplace by ID:', altMarketplaceError);
           } else {
-            console.log('✅ Marketplace updated by ID');
+            logger.debug('✅ Marketplace updated by ID');
           }
         }
         // Don't fail the purchase for this
       } else {
-        console.log('✅ Marketplace updated successfully:', marketplaceUpdateData);
+        logger.debug('✅ Marketplace updated successfully:', marketplaceUpdateData);
       }
 
-      console.log('🔍 DEBUG: Purchase successful!');
-      console.log('🔍 DEBUG: Profile data:', profile);
-      console.log('🔍 DEBUG: User type:', profile?.user_type);
+      logger.debug('🔍 DEBUG: Purchase successful!');
+      logger.debug('🔍 DEBUG: Profile data:', profile);
+      logger.debug('🔍 DEBUG: User type:', profile?.user_type);
 
       // Determine transaction type based on buyer's role
       const isDistributor = profile?.user_type === 'distributor' || 
@@ -292,7 +319,7 @@ export const UltraSimplePurchaseModal: React.FC<UltraSimplePurchaseModalProps> =
       // Use RETAIL type when retailer buys from distributor, PURCHASE otherwise
       const transactionType = isRetailer ? 'RETAIL' : 'PURCHASE';
       
-      console.log('🔍 DEBUG: Transaction type determined:', {
+      logger.debug('🔍 DEBUG: Transaction type determined:', {
         user_type: profile?.user_type,
         full_name: profile?.full_name,
         isDistributor,
@@ -302,12 +329,16 @@ export const UltraSimplePurchaseModal: React.FC<UltraSimplePurchaseModalProps> =
 
       // Create transaction record in transactions table
       // Use the sellerId we captured BEFORE the ownership update
-      let transactionResult: any = null;
+      interface TransactionResult {
+        id?: string;
+        transaction_id?: string;
+      }
+      let transactionResult: TransactionResult | null = null;
       try {
         const transactionId = `TXN-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
         // sellerId was already captured above before ownership update
         
-        console.log('🔍 DEBUG: Transaction creation details:', {
+        logger.debug('🔍 DEBUG: Transaction creation details:', {
           batchId,
           sellerId, // This is the OLD owner (who we bought FROM)
           buyerId: profile?.id, // This is the NEW owner (who bought it)
@@ -348,15 +379,15 @@ export const UltraSimplePurchaseModal: React.FC<UltraSimplePurchaseModalProps> =
           .single();
 
         if (transactionError) {
-          console.warn('⚠️ Failed to create transaction record:', transactionError);
+          logger.warn('⚠️ Failed to create transaction record:', transactionError);
           // Create a fallback transaction result object
           transactionResult = { id: transactionId };
         } else {
           transactionResult = transactionDataResult;
-          console.log('✅ Transaction record created:', transactionResult);
+          logger.debug('✅ Transaction record created:', transactionResult);
         }
       } catch (transactionCreateError) {
-        console.warn('⚠️ Error creating transaction record:', transactionCreateError);
+        logger.warn('⚠️ Error creating transaction record:', transactionCreateError);
         // Create a fallback transaction result with generated ID
         transactionResult = { 
           id: `TXN-${Date.now()}-${Math.random().toString(36).substr(2, 9)}` 
@@ -364,7 +395,7 @@ export const UltraSimplePurchaseModal: React.FC<UltraSimplePurchaseModalProps> =
       }
 
       // Note: isDistributor and isRetailer are already defined above for transaction type
-      console.log('🔍 DEBUG: User type check:', {
+      logger.debug('🔍 DEBUG: User type check:', {
         user_type: profile?.user_type,
         full_name: profile?.full_name,
         isDistributor,
@@ -380,12 +411,12 @@ export const UltraSimplePurchaseModal: React.FC<UltraSimplePurchaseModalProps> =
           created_at: new Date().toISOString()
         };
         
-        console.log('🔍 DEBUG: Distributor inventory data before insert:', inventoryData);
-        console.log('🔍 DEBUG: Batch object keys:', Object.keys(batch));
-        console.log('🔍 DEBUG: Batch.id type:', typeof batch.id, 'value:', batch.id);
-        console.log('🔍 DEBUG: Full batch object structure:', JSON.stringify(batch, null, 2));
+        logger.debug('🔍 DEBUG: Distributor inventory data before insert:', inventoryData);
+        logger.debug('🔍 DEBUG: Batch object keys:', Object.keys(batch));
+        logger.debug('🔍 DEBUG: Batch.id type:', typeof batch.id, 'value:', batch.id);
+        logger.debug('🔍 DEBUG: Full batch object structure:', JSON.stringify(batch, null, 2));
 
-        console.log('🔍 DEBUG: Creating distributor inventory entry:', inventoryData);
+        logger.debug('🔍 DEBUG: Creating distributor inventory entry:', inventoryData);
 
         const { data: inventoryResult, error: inventoryError } = await supabase
           .from('distributor_inventory')
@@ -394,13 +425,13 @@ export const UltraSimplePurchaseModal: React.FC<UltraSimplePurchaseModalProps> =
           .single();
 
         if (inventoryError) {
-          console.error('❌ Distributor inventory creation error:', inventoryError);
-          console.error('❌ Inventory data that failed:', inventoryData);
+          logger.error('❌ Distributor inventory creation error:', inventoryError);
+          logger.error('❌ Inventory data that failed:', inventoryData);
         } else {
-          console.log('✅ Distributor inventory entry created successfully:', inventoryResult);
+          logger.debug('✅ Distributor inventory entry created successfully:', inventoryResult);
         }
       } else if (isDistributor && !marketplaceId) {
-        console.log('⚠️ Skipping distributor inventory creation - no marketplace ID found');
+        logger.debug('⚠️ Skipping distributor inventory creation - no marketplace ID found');
       } else if (isRetailer && marketplaceId) {
         const inventoryData = {
           retailer_id: profile.id,
@@ -410,12 +441,12 @@ export const UltraSimplePurchaseModal: React.FC<UltraSimplePurchaseModalProps> =
           created_at: new Date().toISOString()
         };
         
-        console.log('🔍 DEBUG: Inventory data before insert:', inventoryData);
-        console.log('🔍 DEBUG: Batch object keys:', Object.keys(batch));
-        console.log('🔍 DEBUG: Batch.id type:', typeof batch.id, 'value:', batch.id);
-        console.log('🔍 DEBUG: Full batch object structure:', JSON.stringify(batch, null, 2));
+        logger.debug('🔍 DEBUG: Inventory data before insert:', inventoryData);
+        logger.debug('🔍 DEBUG: Batch object keys:', Object.keys(batch));
+        logger.debug('🔍 DEBUG: Batch.id type:', typeof batch.id, 'value:', batch.id);
+        logger.debug('🔍 DEBUG: Full batch object structure:', JSON.stringify(batch, null, 2));
 
-        console.log('🔍 DEBUG: Creating retailer inventory entry:', inventoryData);
+        logger.debug('🔍 DEBUG: Creating retailer inventory entry:', inventoryData);
 
         const { data: inventoryResult, error: inventoryError } = await supabase
           .from('retailer_inventory')
@@ -424,20 +455,20 @@ export const UltraSimplePurchaseModal: React.FC<UltraSimplePurchaseModalProps> =
           .single();
 
         if (inventoryError) {
-          console.error('❌ Retailer inventory creation error:', inventoryError);
-          console.error('❌ Inventory data that failed:', inventoryData);
+          logger.error('❌ Retailer inventory creation error:', inventoryError);
+          logger.error('❌ Inventory data that failed:', inventoryData);
         } else {
-          console.log('✅ Retailer inventory entry created successfully:', inventoryResult);
+          logger.debug('✅ Retailer inventory entry created successfully:', inventoryResult);
         }
       } else if (isRetailer && !marketplaceId) {
-        console.log('⚠️ Skipping retailer inventory creation - no marketplace ID found');
+        logger.debug('⚠️ Skipping retailer inventory creation - no marketplace ID found');
       } else {
-        console.log('🔍 DEBUG: No inventory creation - user type check failed');
-        console.log('🔍 DEBUG: User type:', profile?.user_type);
-        console.log('🔍 DEBUG: Full name:', profile?.full_name);
-        console.log('🔍 DEBUG: Is distributor:', isDistributor);
-        console.log('🔍 DEBUG: Is retailer:', isRetailer);
-        console.log('🔍 DEBUG: Profile object:', profile);
+        logger.debug('🔍 DEBUG: No inventory creation - user type check failed');
+        logger.debug('🔍 DEBUG: User type:', profile?.user_type);
+        logger.debug('🔍 DEBUG: Full name:', profile?.full_name);
+        logger.debug('🔍 DEBUG: Is distributor:', isDistributor);
+        logger.debug('🔍 DEBUG: Is retailer:', isRetailer);
+        logger.debug('🔍 DEBUG: Profile object:', profile);
       }
 
       // Record transaction on blockchain (optional)
@@ -449,11 +480,11 @@ export const UltraSimplePurchaseModal: React.FC<UltraSimplePurchaseModalProps> =
           
           // If wallet address is not available, try to fetch it from the seller's profile
           if (!sellerWalletAddress) {
-            console.log('🔍 DEBUG: Seller wallet address not found in batch, fetching from profile...');
+            logger.debug('🔍 DEBUG: Seller wallet address not found in batch, fetching from profile...');
             
             // Try to get seller ID from different sources
             const sellerId = batch.current_owner || batch.current_seller_id || batch.farmer_id;
-            console.log('🔍 DEBUG: Seller ID for wallet lookup:', sellerId);
+            logger.debug('🔍 DEBUG: Seller ID for wallet lookup:', sellerId);
             
             if (sellerId) {
               try {
@@ -464,32 +495,32 @@ export const UltraSimplePurchaseModal: React.FC<UltraSimplePurchaseModalProps> =
                   .single();
                 
                 sellerWalletAddress = sellerProfile?.wallet_address;
-                console.log('🔍 DEBUG: Fetched seller profile:', sellerProfile);
-                console.log('🔍 DEBUG: Seller wallet address from profile:', sellerWalletAddress);
+                logger.debug('🔍 DEBUG: Fetched seller profile:', sellerProfile);
+                logger.debug('🔍 DEBUG: Seller wallet address from profile:', sellerWalletAddress);
                 
                 // If still no wallet address, try to use a default or generate one
                 if (!sellerWalletAddress) {
-                  console.warn('🔍 DEBUG: Seller has no wallet address in profile, using fallback...');
+                  logger.warn('🔍 DEBUG: Seller has no wallet address in profile, using fallback...');
                   // Generate a placeholder wallet address for demo purposes
                   // In production, you would want to prompt the seller to connect their wallet
                   sellerWalletAddress = `0x${sellerId.replace(/-/g, '').substring(0, 40)}`;
-                  console.log('🔍 DEBUG: Generated placeholder wallet address:', sellerWalletAddress);
+                  logger.debug('🔍 DEBUG: Generated placeholder wallet address:', sellerWalletAddress);
                 }
               } catch (error) {
-                console.warn('🔍 DEBUG: Could not fetch seller profile:', error);
+                logger.warn('🔍 DEBUG: Could not fetch seller profile:', error);
                 // Use a default wallet address for demo purposes
                 sellerWalletAddress = '0x0000000000000000000000000000000000000000';
-                console.log('🔍 DEBUG: Using default wallet address due to error:', sellerWalletAddress);
+                logger.debug('🔍 DEBUG: Using default wallet address due to error:', sellerWalletAddress);
               }
             } else {
-              console.warn('🔍 DEBUG: No seller ID found for wallet lookup');
+              logger.warn('🔍 DEBUG: No seller ID found for wallet lookup');
               // Use a default wallet address for demo purposes
               sellerWalletAddress = '0x0000000000000000000000000000000000000000';
-              console.log('🔍 DEBUG: Using default wallet address:', sellerWalletAddress);
+              logger.debug('🔍 DEBUG: Using default wallet address:', sellerWalletAddress);
             }
           }
           
-          console.log('🔍 DEBUG: Seller wallet address sources:', {
+          logger.debug('🔍 DEBUG: Seller wallet address sources:', {
             batchProfilesWalletAddress: batch.profiles?.wallet_address,
             batchBatchesProfilesWalletAddress: batch.batches?.profiles?.wallet_address,
             batchCurrentSellerId: batch.current_seller_id,
@@ -498,40 +529,74 @@ export const UltraSimplePurchaseModal: React.FC<UltraSimplePurchaseModalProps> =
             finalSellerWalletAddress: sellerWalletAddress
           });
           
-          console.log('🔍 DEBUG: Wallet address check:', {
+          logger.debug('🔍 DEBUG: Wallet address check:', {
             batchProfiles: batch.profiles,
             sellerWalletAddress,
             account,
             batchCurrentSellerId: batch.current_seller_id
           });
           
-          // Validate that we have valid Ethereum addresses
+          // CRITICAL: Get blockchainBatchId from batch object or database
+          // This must be the actual blockchain batch ID from registration, not the database UUID
+          let blockchainBatchId: number | null = null;
+          
+          // Try to get from batch object first
+          blockchainBatchId = batch.blockchain_id || batch.batches?.blockchain_id || batch.blockchain_batch_id || batch.batches?.blockchain_batch_id || null;
+          
+          // If not in batch object, fetch from database
+          if (!blockchainBatchId && batchId) {
+            try {
+              const { data: batchData, error: batchFetchError } = await supabase
+                .from('batches')
+                .select('blockchain_id, blockchain_batch_id')
+                .eq('id', batchId)
+                .single();
+              
+              if (!batchFetchError && batchData) {
+                blockchainBatchId = batchData.blockchain_id || batchData.blockchain_batch_id || null;
+                logger.debug('✅ Fetched blockchainBatchId from database:', blockchainBatchId);
+              } else {
+                logger.warn('⚠️ Failed to fetch blockchainBatchId from database:', batchFetchError);
+              }
+            } catch (fetchError) {
+              logger.warn('⚠️ Error fetching blockchainBatchId:', fetchError);
+            }
+          }
+          
+          // Validate that we have valid Ethereum addresses and blockchainBatchId
           if (!sellerWalletAddress || !account) {
-            console.warn('🔍 DEBUG: Missing wallet addresses for blockchain transaction');
-            console.warn('🔍 DEBUG: sellerWalletAddress:', sellerWalletAddress);
-            console.warn('🔍 DEBUG: account:', account);
-            console.warn('🔍 DEBUG: Skipping blockchain transaction, continuing with database transaction');
+            logger.warn('🔍 DEBUG: Missing wallet addresses for blockchain transaction');
+            logger.warn('🔍 DEBUG: sellerWalletAddress:', sellerWalletAddress);
+            logger.warn('🔍 DEBUG: account:', account);
+            logger.warn('🔍 DEBUG: Skipping blockchain transaction, continuing with database transaction');
+            // Don't return - continue with the purchase without blockchain transaction
+          } else if (!blockchainBatchId || !Number.isInteger(Number(blockchainBatchId))) {
+            logger.warn('⚠️ Missing or invalid blockchainBatchId for blockchain transaction');
+            logger.warn('⚠️ blockchainBatchId:', blockchainBatchId);
+            logger.warn('⚠️ Skipping blockchain transaction - batch may not be registered on blockchain yet');
             // Don't return - continue with the purchase without blockchain transaction
           } else {
-            console.log('🔍 DEBUG: Blockchain transaction addresses:', {
+            logger.debug('🔍 DEBUG: Blockchain transaction addresses:', {
               seller: sellerWalletAddress,
               buyer: account,
-              batchId: batchId
+              batchId: batchId,
+              blockchainBatchId: blockchainBatchId
             });
             
             const blockchainTransaction = await blockchainTransactionManager.recordPurchaseTransaction(
-              batchId, // Use the validated batch ID
+              batchId, // Database UUID (string)
               sellerWalletAddress, // From current seller (Ethereum address)
               account, // To buyer (current wallet address)
               quantity,
               finalTotal,
+              Number(blockchainBatchId), // CRITICAL: Actual blockchain batch ID (number) from registration
               'PURCHASE'
             );
-            console.log('🔍 DEBUG: Blockchain transaction recorded:', blockchainTransaction);
+            logger.debug('🔍 DEBUG: Blockchain transaction recorded:', blockchainTransaction);
             
             // Generate and upload purchase certificate to the same group
             try {
-              console.log('🔍 DEBUG: Generating purchase certificate...');
+              logger.debug('🔍 DEBUG: Generating purchase certificate...');
               
               // CRITICAL: Fetch group_id from database to ensure we use the correct group
               // This ensures purchase certificates are added to the same group as harvest certificate
@@ -539,7 +604,7 @@ export const UltraSimplePurchaseModal: React.FC<UltraSimplePurchaseModalProps> =
               
               // If group_id not in batch object, fetch from database
               if (!groupId && batchId) {
-                console.log('🔍 DEBUG: Group ID not in batch object, fetching from database...');
+                logger.debug('🔍 DEBUG: Group ID not in batch object, fetching from database...');
                 try {
                   const { data: batchData, error: batchFetchError } = await supabase
                     .from('batches')
@@ -549,16 +614,16 @@ export const UltraSimplePurchaseModal: React.FC<UltraSimplePurchaseModalProps> =
                   
                   if (!batchFetchError && batchData?.group_id) {
                     groupId = batchData.group_id;
-                    console.log('✅ Fetched group_id from database:', groupId);
+                    logger.debug('✅ Fetched group_id from database:', groupId);
                   } else {
-                    console.error('❌ Failed to fetch group_id from database:', batchFetchError);
+                    logger.error('❌ Failed to fetch group_id from database:', batchFetchError);
                   }
                 } catch (fetchError) {
-                  console.error('❌ Error fetching group_id:', fetchError);
+                  logger.error('❌ Error fetching group_id:', fetchError);
                 }
               }
               
-              console.log('🔍 DEBUG: Group ID lookup:', {
+              logger.debug('🔍 DEBUG: Group ID lookup:', {
                 batchGroupId: batch.group_id,
                 batchBatchesGroupId: batch.batches?.group_id,
                 finalGroupId: groupId,
@@ -566,10 +631,10 @@ export const UltraSimplePurchaseModal: React.FC<UltraSimplePurchaseModalProps> =
               });
               
               if (!groupId) {
-                console.error('❌ CRITICAL: No group ID found for batch! Cannot add purchase certificate to group.');
-                console.error('🔍 DEBUG: Batch object keys:', Object.keys(batch));
-                console.error('🔍 DEBUG: Batch object:', batch);
-                console.error('🔍 DEBUG: Batch ID:', batchId);
+                logger.error('❌ CRITICAL: No group ID found for batch! Cannot add purchase certificate to group.');
+                logger.error('🔍 DEBUG: Batch object keys:', Object.keys(batch));
+                logger.error('🔍 DEBUG: Batch object:', batch);
+                logger.error('🔍 DEBUG: Batch ID:', batchId);
                 toast({
                   variant: "destructive",
                   title: "Certificate Upload Failed",
@@ -596,7 +661,7 @@ export const UltraSimplePurchaseModal: React.FC<UltraSimplePurchaseModalProps> =
                   }
                 }
               } catch (e) {
-                console.warn('Could not resolve seller name:', e);
+                logger.warn('Could not resolve seller name:', e);
                 sellerName = batch.profiles?.full_name || batch.batches?.profiles?.full_name || 'Unknown Seller';
               }
               
@@ -614,7 +679,7 @@ export const UltraSimplePurchaseModal: React.FC<UltraSimplePurchaseModalProps> =
                   }
                 }
               } catch (e) {
-                console.warn('Could not resolve buyer name:', e);
+                logger.warn('Could not resolve buyer name:', e);
                 buyerName = profile?.full_name || 'Unknown Buyer';
               }
               
@@ -629,21 +694,24 @@ export const UltraSimplePurchaseModal: React.FC<UltraSimplePurchaseModalProps> =
                 buyerName: buyerName // Store resolved name for display
               };
               
-              console.log('🔍 DEBUG: Purchase data:', purchaseData);
-              console.log('🔍 DEBUG: Group ID:', groupId);
-              console.log('🔍 DEBUG: Seller ID:', sellerId, 'Seller Name:', sellerName);
-              console.log('🔍 DEBUG: Buyer ID:', profile?.id, 'Buyer Name:', buyerName);
+              logger.debug('Purchase data', { purchaseData, groupId, sellerId, sellerName, buyerId: profile?.id, buyerName });
               
-              const purchaseCertificateResult = await singleStepGroupManager.uploadPurchaseCertificate(
-                groupId,
-                purchaseData
+              const purchaseCertificateResult = await ipfsManager.uploadPurchaseCertificate(
+                sanitizeString(groupId, 100),
+                {
+                  batchId: sanitizeString(purchaseData.batchId, 100),
+                  from: sanitizeString(sellerId || '', 255),
+                  to: sanitizeString(profile?.id || '', 255),
+                  quantity: purchaseData.quantity,
+                  pricePerKg: purchaseData.pricePerKg,
+                  timestamp: purchaseData.timestamp,
+                  sellerName: sanitizeString(sellerName, 255),
+                  buyerName: sanitizeString(buyerName, 255)
+                }
               );
               
                 if (purchaseCertificateResult) {
-                  console.log('✅ Purchase certificate generated and uploaded to group:', purchaseCertificateResult);
-                  console.log('✅ Group ID used:', groupId);
-                  console.log('✅ IPFS Hash:', purchaseCertificateResult.ipfsHash);
-                  console.log('✅ Full traceability chain maintained - certificate added to same group as harvest');
+                  logger.debug('Purchase certificate uploaded', { groupId, ipfsHash: purchaseCertificateResult.ipfsHash });
                   
                   // Note: storeFileReference is automatically called by uploadFileToGroup
                   // So the transaction is already stored in group_files table
@@ -652,9 +720,9 @@ export const UltraSimplePurchaseModal: React.FC<UltraSimplePurchaseModalProps> =
                     description: `Purchase certificate added to group ${groupId.substring(0, 8)}... for complete traceability.`,
                   });
                 } else {
-                  console.error('❌ CRITICAL: Purchase certificate upload failed!');
-                  console.error('❌ Group ID:', groupId);
-                  console.error('❌ Batch ID:', batchId);
+                  logger.error('❌ CRITICAL: Purchase certificate upload failed!');
+                  logger.error('❌ Group ID:', groupId);
+                  logger.error('❌ Batch ID:', batchId);
                   
                   // Even if certificate upload failed, store transaction record in group_files for traceability
                   if (groupId) {
@@ -691,12 +759,12 @@ export const UltraSimplePurchaseModal: React.FC<UltraSimplePurchaseModalProps> =
                         .insert(groupFileData);
                       
                       if (groupFileError) {
-                        console.error('❌ Failed to store purchase transaction in group_files:', groupFileError);
+                        logger.error('❌ Failed to store purchase transaction in group_files:', groupFileError);
                       } else {
-                        console.log('✅ Purchase transaction stored in group_files (without certificate)');
+                        logger.debug('✅ Purchase transaction stored in group_files (without certificate)');
                       }
                     } catch (groupFileErr) {
-                      console.error('❌ Error storing purchase transaction in group_files:', groupFileErr);
+                      logger.error('❌ Error storing purchase transaction in group_files:', groupFileErr);
                     }
                   }
                   
@@ -711,7 +779,11 @@ export const UltraSimplePurchaseModal: React.FC<UltraSimplePurchaseModalProps> =
               // Update transaction record with IPFS hash and blockchain hash if available
               if (transactionResult?.id || transactionResult?.transaction_id) {
                 try {
-                  const updateData: any = {};
+                  interface TransactionUpdateData {
+                    ipfs_hash?: string;
+                    blockchain_hash?: string;
+                  }
+                  const updateData: TransactionUpdateData = {};
                   if (purchaseCertificateResult?.ipfsHash) {
                     updateData.ipfs_hash = purchaseCertificateResult.ipfsHash;
                   }
@@ -728,10 +800,10 @@ export const UltraSimplePurchaseModal: React.FC<UltraSimplePurchaseModalProps> =
                       .update(updateData)
                       .eq(updateField, updateValue);
                     
-                    console.log('✅ Transaction record updated with IPFS and blockchain hashes');
+                    logger.debug('✅ Transaction record updated with IPFS and blockchain hashes');
                   }
                 } catch (updateError) {
-                  console.warn('⚠️ Failed to update transaction record:', updateError);
+                  logger.warn('⚠️ Failed to update transaction record:', updateError);
                 }
               }
               
@@ -756,25 +828,25 @@ export const UltraSimplePurchaseModal: React.FC<UltraSimplePurchaseModalProps> =
                     blockchainHash: blockchainTransaction?.transactionHash || undefined
                 });
                 
-                console.log('✅ QR code generated for purchase transaction');
+                logger.debug('✅ QR code generated for purchase transaction');
                 
                 // Store QR code in localStorage for later access
                   localStorage.setItem(`purchase_qr_${transactionIdForQR}`, qrCodeDataURL);
               } catch (qrError) {
-                console.error('❌ QR code generation failed:', qrError);
+                logger.error('❌ QR code generation failed:', qrError);
                 // Continue even if QR code generation fails
                 }
               } else {
-                console.warn('⚠️ Skipping QR code generation: no transaction ID available');
+                logger.warn('⚠️ Skipping QR code generation: no transaction ID available');
               }
             } catch (certError) {
-              console.error('❌ Purchase certificate generation failed:', certError);
-              console.warn('⚠️ Purchase will continue without certificate');
+              logger.error('❌ Purchase certificate generation failed:', certError);
+              logger.warn('⚠️ Purchase will continue without certificate');
               // Continue even if certificate generation fails - don't throw
             }
           }
         } catch (blockchainError) {
-          console.error('🔍 DEBUG: Blockchain transaction failed:', blockchainError);
+          logger.error('🔍 DEBUG: Blockchain transaction failed:', blockchainError);
           // Continue even if blockchain fails
         }
       }
@@ -813,7 +885,7 @@ export const UltraSimplePurchaseModal: React.FC<UltraSimplePurchaseModalProps> =
               }
             }
           } catch (error) {
-            console.warn('Could not fetch seller location:', error);
+            logger.warn('Could not fetch seller location:', error);
           }
         }
 
@@ -842,10 +914,10 @@ export const UltraSimplePurchaseModal: React.FC<UltraSimplePurchaseModalProps> =
             harvestDate: batchDetails.harvest_date,
             freshnessDuration: batchDetails.freshness_duration || 7,
           });
-          console.log('✅ Delivery request created');
+          logger.debug('✅ Delivery request created');
         }
       } catch (deliveryError) {
-        console.warn('⚠️ Failed to create delivery request:', deliveryError);
+        logger.warn('⚠️ Failed to create delivery request:', deliveryError);
         // Don't fail the purchase if delivery request creation fails
       }
 
@@ -856,7 +928,7 @@ export const UltraSimplePurchaseModal: React.FC<UltraSimplePurchaseModalProps> =
         description: `Your order for ${quantity}kg of ${batch.batches?.crop_type || 'crop'} has been placed. The item is now in your inventory.`,
       });
     } catch (error) {
-      console.error('Purchase error:', error);
+      logger.error('Purchase error:', error);
       toast({
         variant: "destructive",
         title: "Purchase Failed",
@@ -890,7 +962,13 @@ export const UltraSimplePurchaseModal: React.FC<UltraSimplePurchaseModalProps> =
 
 // Separate component for the form to avoid hooks issues
 const PurchaseForm: React.FC<{
-  batch: any;
+  batch: Record<string, unknown> & {
+    crop_type?: string;
+    variety?: string;
+    quantity?: number;
+    price_per_kg?: number;
+    batches?: Record<string, unknown> & { crop_type?: string; variety?: string };
+  };
   onPurchase: (quantity: number, address: string) => void;
   onClose: () => void;
 }> = ({ batch, onPurchase, onClose }) => {

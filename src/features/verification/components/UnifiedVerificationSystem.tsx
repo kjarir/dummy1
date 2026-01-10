@@ -25,6 +25,8 @@ import {
 import { useToast } from '@/components/ui/use-toast';
 import { supabase } from '@/integrations/supabase/client';
 import { getIPFSFileUrl } from '@/features/ipfs/utils/ipfs';
+import { logger } from '@/lib/logger';
+import { sanitizeString, validateInteger, isValidUUID, sanitizeError } from '@/lib/security';
 
 interface CertificateData {
   id: string;
@@ -94,30 +96,33 @@ export const UnifiedVerificationSystem: React.FC = () => {
       let batchInfo: BatchData | null = null;
 
       // Check if input is a number (likely batch ID)
-      if (!isNaN(Number(inputValue))) {
-        console.log('Treating as batch ID:', inputValue);
-        
+      const sanitizedInput = sanitizeString(inputValue, 100);
+      const numericValue = validateInteger(sanitizedInput, 1, Number.MAX_SAFE_INTEGER);
+      
+      if (!isNaN(numericValue) && numericValue > 0) {
         // Get batch data from database using integer ID
         const { data: batch, error: batchError } = await supabase
           .from('batches')
           .select('*')
-          .eq('id', parseInt(inputValue))
+          .eq('id', numericValue)
           .single();
 
         if (batchError || !batch) {
-          throw new Error(`Batch not found with ID: ${inputValue}`);
+          throw new Error('Batch not found');
         }
 
         batchInfo = batch;
         // Try to get group_id, if not available, use a fallback
-        groupId = batch.group_id || `batch_${batch.id}`;
-        
-        console.log('Found batch:', batch);
-        console.log('Using group ID:', groupId);
+        groupId = (batch.group_id && isValidUUID(batch.group_id)) 
+          ? batch.group_id 
+          : `batch_${batch.id}`;
       } else {
-        // Treat as Group ID
-        console.log('Treating as Group ID:', inputValue);
-        groupId = inputValue;
+        // Treat as Group ID - sanitize and validate
+        const sanitizedGroupId = sanitizeString(inputValue, 50);
+        if (!sanitizedGroupId || (sanitizedGroupId.length > 0 && !isValidUUID(sanitizedGroupId))) {
+          throw new Error('Invalid Group ID format');
+        }
+        groupId = sanitizedGroupId;
         
         // Try to find batch data for this group (but don't fail if not found)
         try {
@@ -129,25 +134,21 @@ export const UnifiedVerificationSystem: React.FC = () => {
 
           if (!batchError && batch) {
             batchInfo = batch;
-            console.log('Found batch for group:', batch);
-          } else {
-            console.log('No batch found for group ID, will show certificates only');
           }
         } catch (error) {
-          console.log('Error finding batch for group ID, will show certificates only:', error);
+          logger.warn('Could not find batch for group ID');
         }
       }
 
       if (!groupId) {
-        throw new Error('No Group ID found for verification.');
+        throw new Error('No Group ID found for verification');
       }
 
-      // Use the updated SingleStepGroupManager to get certificates
-      console.log('Fetching certificates using SingleStepGroupManager...');
-      const { singleStepGroupManager } = await import('@/features/ipfs/utils/singleStepGroupManager');
-      const certificates = await singleStepGroupManager.getGroupCertificates(groupId);
+      // Get certificates using IPFS manager
+      const { ipfsManager } = await import('@/features/ipfs/utils/ipfsManager');
+      const certificates = await ipfsManager.getGroupCertificates(groupId);
       
-      console.log(`Found ${certificates.length} certificates for group ${groupId}`);
+      logger.debug(`Found ${certificates.length} certificates for group ${groupId}`);
       
       // Convert certificates to the expected format
       let groupFiles = certificates.map((cert: any) => ({
@@ -165,7 +166,7 @@ export const UnifiedVerificationSystem: React.FC = () => {
 
       // If no group files found, try to create mock certificates from batch data
       if (!hasGroupFiles || groupFiles.length === 0) {
-        console.log('No group files found, creating mock certificates from batch data');
+        logger.debug('No group files found, creating mock certificates from batch data');
         
         if (batchInfo) {
           // Create a mock certificate from batch data
@@ -193,7 +194,7 @@ export const UnifiedVerificationSystem: React.FC = () => {
       }
 
       // Convert group files to certificate format
-      console.log('Converting group files to certificates:', groupFiles);
+      logger.debug('Converting group files to certificates:', groupFiles);
       const certificateList: CertificateData[] = groupFiles.map((file: any, index: number) => {
         const certificate = {
           id: file.id,
@@ -205,11 +206,11 @@ export const UnifiedVerificationSystem: React.FC = () => {
           metadata: file.metadata || {},
           createdAt: file.created_at || file.createdAt
         };
-        console.log(`Certificate ${index + 1}:`, certificate);
+        logger.debug(`Certificate ${index + 1}:`, certificate);
         return certificate;
       });
       
-      console.log(`Total certificates created: ${certificateList.length}`);
+      logger.debug(`Total certificates created: ${certificateList.length}`);
 
       setBatchData(batchInfo);
       setCertificates(certificateList);
@@ -220,8 +221,9 @@ export const UnifiedVerificationSystem: React.FC = () => {
       });
 
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'An unexpected error occurred.';
+      const errorMessage = sanitizeError(error);
       setError(errorMessage);
+      logger.error('Verification failed', error);
       toast({
         variant: "destructive",
         title: "Verification failed",
@@ -337,7 +339,7 @@ export const UnifiedVerificationSystem: React.FC = () => {
       URL.revokeObjectURL(imageUrl);
       
       if (result) {
-        console.log('QR Code detected:', result);
+        logger.debug('QR Code detected:', result);
         
         // Set the detected data in the input field
         setInputValue(result);
@@ -353,8 +355,8 @@ export const UnifiedVerificationSystem: React.FC = () => {
         throw new Error('No QR code found in the image');
       }
     } catch (error) {
-      console.error('QR scan error:', error);
-      const errorMessage = error instanceof Error ? error.message : 'Failed to scan QR code';
+      logger.error('QR scan error', error);
+      const errorMessage = sanitizeError(error);
       setError(errorMessage);
       toast({
         variant: "destructive",

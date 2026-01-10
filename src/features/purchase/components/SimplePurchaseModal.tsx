@@ -9,7 +9,9 @@ import { Separator } from '@/components/ui/separator';
 import { useToast } from '@/components/ui/use-toast';
 import { useAuth } from '@/contexts/AuthContext';
 import { supabase } from '@/integrations/supabase/client';
-import { singleStepGroupManager } from '@/features/ipfs/utils/singleStepGroupManager';
+import { ipfsManager } from '@/features/ipfs/utils/ipfsManager';
+import { logger } from '@/lib/logger';
+import { sanitizeError } from '@/lib/security';
 import { 
   ShoppingCart, 
   Package, 
@@ -22,8 +24,12 @@ import {
   Loader2
 } from 'lucide-react';
 
+import { Tables } from '@/integrations/supabase/types';
+
 interface SimplePurchaseModalProps {
-  batch: any;
+  batch: Tables<'batches'> & {
+    profiles?: Pick<Tables<'profiles'>, 'full_name'> | null;
+  };
   isOpen: boolean;
   onClose: () => void;
   onPurchaseComplete: () => void;
@@ -115,7 +121,7 @@ export const SimplePurchaseModal: React.FC<SimplePurchaseModalProps> = ({
           buyerName = emailName.charAt(0).toUpperCase() + emailName.slice(1);
         }
       } catch (error) {
-        console.warn('Could not fetch buyer name from profile:', error);
+        logger.warn('Could not fetch buyer name from profile:', error);
         if (user?.name) {
           buyerName = user.name;
         } else if (user?.email) {
@@ -129,7 +135,7 @@ export const SimplePurchaseModal: React.FC<SimplePurchaseModalProps> = ({
       }
       
       // Generate purchase certificate and add to group
-      const { pdfBlob, ipfsHash } = await singleStepGroupManager.uploadPurchaseCertificate(
+      const { pdfBlob, ipfsHash } = await ipfsManager.uploadPurchaseCertificate(
         batch.group_id,
         {
           batchId: batch.id,
@@ -164,7 +170,7 @@ export const SimplePurchaseModal: React.FC<SimplePurchaseModalProps> = ({
         description: `Your order for ${quantity}kg of ${batch.crop_type} has been placed. A new certificate has been added to the group.`,
       });
     } catch (error) {
-      console.error('Purchase error:', error);
+      logger.error('Purchase error:', error);
       toast({
         variant: "destructive",
         title: "Purchase Failed",

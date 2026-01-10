@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { logger } from '@/lib/logger';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -61,9 +62,9 @@ export const MarketPriceDisplay: React.FC<MarketPriceDisplayProps> = ({
     setError(null);
     
     try {
-      console.log('🔄 Fetching mandi prices for:', { cropType, variety, state, district });
+      logger.debug('🔄 Fetching mandi prices for:', { cropType, variety, state, district });
       const data = await getPriceSuggestions(cropType, variety, state, district);
-      console.log('✅ Mandi price data received:', data);
+      logger.debug('✅ Mandi price data received:', data);
       setPriceData(data);
       setLastUpdated(new Date());
       
@@ -80,7 +81,7 @@ export const MarketPriceDisplay: React.FC<MarketPriceDisplayProps> = ({
         });
       }
     } catch (err) {
-      console.error('❌ Error fetching mandi prices:', err);
+      logger.error('❌ Error fetching mandi prices:', err);
       const errorMessage = err instanceof Error ? err.message : 'Failed to fetch market prices';
       setError(errorMessage);
       toast({

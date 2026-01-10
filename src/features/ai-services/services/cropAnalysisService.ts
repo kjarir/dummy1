@@ -5,7 +5,11 @@
 
 import { SoilDataResponse } from './iotSoilDataService';
 
-const GEMINI_API_KEY = import.meta.env.VITE_GEMINI_API_KEY || 'AIzaSyAm_xQf5quGHSqLqe7Ui6lyDVJRdGlBFRU';
+const GEMINI_API_KEY = import.meta.env.VITE_GEMINI_API_KEY;
+
+if (!GEMINI_API_KEY) {
+  throw new Error('VITE_GEMINI_API_KEY environment variable is required. Please configure it in your .env file.');
+}
 const GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent';
 
 export interface CropQualityAnalysisResponse {

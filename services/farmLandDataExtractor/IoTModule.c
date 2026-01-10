@@ -7,12 +7,17 @@
 #include <DHTesp.h>
 
 // ---------------- WiFi ----------------
-const char* ssid = "Wokwi-GUEST";
-const char* password = "";
+// SECURITY: Use environment variables or secure storage for credentials
+// This is a demo/hardware module - credentials should be stored securely
+// For production, use WiFiManager library or secure provisioning
+const char* ssid = "";  // Set via WiFiManager or environment
+const char* password = "";  // Set via WiFiManager or environment
 
 // ---------------- ThingSpeak ----------------
-String apiKey = "WVW7SRHXIYQJPXSG";   // YOUR API KEY
-const char* server = "https://hardwareapi-4xbs.onrender.com/update";
+// SECURITY: API key should be stored in EEPROM or secure storage
+// Never hardcode credentials in production code
+String apiKey = "";  // Load from EEPROM or secure storage
+const char* server = "";  // Load from environment or configuration
 
 // ---------------- Pins ----------------
 #define DHTPIN 15

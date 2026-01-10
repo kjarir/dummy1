@@ -1,4 +1,6 @@
 import React, { Component, ErrorInfo, ReactNode } from 'react';
+import { logger } from '@/lib/logger';
+import { sanitizeError } from '@/lib/security';
 
 interface Props {
   children: ReactNode;
@@ -20,7 +22,12 @@ export class ErrorBoundary extends Component<Props, State> {
   }
 
   public componentDidCatch(error: Error, errorInfo: ErrorInfo) {
-    console.error('ErrorBoundary caught an error:', error, errorInfo);
+    logger.error('ErrorBoundary caught an error', {
+      error: sanitizeError(error),
+      componentStack: errorInfo.componentStack,
+      errorName: error.name,
+      errorMessage: error.message
+    });
   }
 
   public render() {

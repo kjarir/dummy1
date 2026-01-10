@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { logger } from '@/lib/logger';
 import { Badge } from '@/components/ui/badge';
 import { transactionManager } from '@/features/blockchain/utils/transactionManager';
 
@@ -29,7 +30,7 @@ export const BatchQuantityDisplay: React.FC<BatchQuantityDisplayProps> = ({
           setCurrentQuantity(chain.availableQuantity);
         }
       } catch (error) {
-        console.error('Error calculating current quantity:', error);
+        logger.error('Error calculating current quantity:', error);
         // If there's an error (like table doesn't exist), show original quantity
         setCurrentQuantity(originalQuantity);
       } finally {

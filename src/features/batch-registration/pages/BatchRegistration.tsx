@@ -4,7 +4,9 @@ import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
 import { useWeb3 } from '@/features/blockchain/contexts/Web3Context';
 import { useContract } from '@/hooks/useContract';
-import { singleStepGroupManager } from '@/features/ipfs/utils/singleStepGroupManager';
+import { ipfsManager } from '@/features/ipfs/utils/ipfsManager';
+import { logger } from '@/lib/logger';
+import { sanitizeError, sanitizeString, validateInteger, validateNumber } from '@/lib/security';
 import { uploadBatchMetadataToIPFS } from '@/features/ipfs/utils/ipfs';
 import { blockchainTransactionManager } from '@/features/blockchain/utils/blockchainTransactionManager';
 import { BatchInput, CONTRACT_ADDRESS } from '@/contracts/config';
@@ -54,7 +56,16 @@ export const BatchRegistration = () => {
   const [step, setStep] = useState<'form' | 'uploading' | 'analyzing' | 'blockchain' | 'complete'>('form');
   const [ipfsHash, setIpfsHash] = useState<string>('');
   const [batchId, setBatchId] = useState<number | null>(null);
-  const [cropAnalysis, setCropAnalysis] = useState<any>(null);
+  interface CropAnalysisData {
+    qualityAssessment?: string;
+    recommendations?: string;
+    soilRecommendations?: string;
+    overallAssessment?: string;
+    qualityScore?: number;
+    [key: string]: unknown;
+  }
+  
+  const [cropAnalysis, setCropAnalysis] = useState<CropAnalysisData | null>(null);
   const { toast } = useToast();
   const navigate = useNavigate();
 
@@ -92,20 +103,20 @@ export const BatchRegistration = () => {
       });
 
       // Fetch soil data from IoT device (with retry logic built-in)
-      console.log('🔄 Fetching soil data from IoT device...');
-      console.log('📡 API Endpoint: https://hardwareapi-4xbs.onrender.com/latest');
+      logger.debug('Fetching soil data from IoT device');
       
       // fetchSoilData now has built-in retry logic and won't throw errors
       // It will return empty object on failure
       soilData = await fetchSoilData();
       
-      console.log('📊 Soil Data Result:', soilData ? JSON.stringify(soilData, null, 2) : 'null');
-      console.log('📊 Soil Data Keys:', soilData ? Object.keys(soilData) : 'null');
-      console.log('📊 Soil Data Has Data:', soilData && Object.keys(soilData).length > 0);
+      logger.debug('Soil data received', { 
+        hasData: Boolean(soilData && Object.keys(soilData).length > 0),
+        keys: soilData ? Object.keys(soilData).length : 0
+      });
       
       // Validate that we actually got sensor data
       if (!soilData || Object.keys(soilData).length === 0) {
-        console.warn('⚠️ Empty soil data received from API');
+        logger.warn('Empty soil data received from API');
         toast({
           variant: "destructive",
           title: "No Soil Data",
@@ -123,8 +134,7 @@ export const BatchRegistration = () => {
                               soilData.rain !== undefined;
         
         if (!hasSensorData) {
-          console.warn('⚠️ No sensor readings found in soil data');
-          console.warn('⚠️ Available fields:', Object.keys(soilData));
+          logger.warn('No sensor readings found in soil data', { availableFields: Object.keys(soilData) });
           toast({
             variant: "destructive",
             title: "Invalid Soil Data",
@@ -132,13 +142,13 @@ export const BatchRegistration = () => {
           });
           soilData = null; // Set to null so we skip Gemini analysis
         } else {
-          console.log('✅ Valid sensor data received:', {
+          logger.debug('Valid sensor data received', {
             temperature: soilData.temperature,
             humidity: soilData.humidity,
             soilMoisture: soilData.soilMoisture || soilData.moisture,
-            ldr: soilData.ldr,
-            gas: soilData.gas,
-            rain: soilData.rain
+            hasLdr: soilData.ldr !== undefined,
+            hasGas: soilData.gas !== undefined,
+            hasRain: soilData.rain !== undefined
           });
         }
       }
@@ -154,40 +164,38 @@ export const BatchRegistration = () => {
           description: "Analyzing crop quality based on soil data...",
         });
 
-        console.log('🤖 Sending soil data to Gemini for crop quality analysis...');
-        console.log('📤 Gemini Input - Soil Data:', soilData);
-        console.log('📤 Gemini Input - Crop Type:', formData.cropType);
-        console.log('📤 Gemini Input - Variety:', formData.variety);
+        logger.debug('Sending soil data to Gemini for crop quality analysis', {
+          cropType: sanitizeString(formData.cropType, 100),
+          variety: sanitizeString(formData.variety, 100),
+          hasSoilData: Boolean(soilData)
+        });
 
         try {
           analysisData = await analyzeCropQualityFromSoil(
             soilData,
-            formData.cropType,
-            formData.variety
+            sanitizeString(formData.cropType, 100),
+            sanitizeString(formData.variety, 100)
           );
 
-          console.log('✅ Gemini Crop Quality Analysis Completed');
-          console.log('📊 Full Analysis Data:', JSON.stringify(analysisData, null, 2));
-          console.log('📊 Analysis Keys:', Object.keys(analysisData));
-          console.log('📝 Quality Assessment:', analysisData.qualityAssessment);
-          console.log('💡 Recommendations:', analysisData.recommendations);
-          console.log('🌱 Soil Recommendations:', analysisData.soilRecommendations);
-          console.log('📋 Overall Assessment:', analysisData.overallAssessment);
-          console.log('📈 Quality Score:', analysisData.qualityScore);
+          logger.debug('Gemini crop quality analysis completed', {
+            hasQualityAssessment: Boolean(analysisData?.qualityAssessment),
+            hasRecommendations: Boolean(analysisData?.recommendations),
+            qualityScore: analysisData?.qualityScore
+          });
 
           setCropAnalysis(analysisData);
-        } catch (geminiError: any) {
-          console.error('❌ Gemini analysis failed:', geminiError);
+        } catch (geminiError: unknown) {
+          logger.error('Gemini analysis failed', geminiError);
           toast({
             variant: "destructive",
             title: "Gemini Analysis Failed",
-            description: geminiError.message || "Could not analyze crop quality with Gemini API. Please check your API key and try again.",
+            description: geminiError instanceof Error ? sanitizeError(geminiError) : "Could not analyze crop quality with Gemini API. Please check your API key and try again.",
           });
           // Don't set analysisData - let it remain null so registration can continue without analysis
           analysisData = null;
         }
       } else {
-        console.warn('⚠️ No soil data available, skipping Gemini analysis');
+        logger.debug('No soil data available, skipping Gemini analysis');
         toast({
           title: "No Soil Data",
           description: "Soil data not available. Continuing with registration.",
@@ -221,10 +229,9 @@ export const BatchRegistration = () => {
       // Step 2: Generate harvest certificate and create group using SINGLE-STEP method
       const tempBatchId = Date.now(); // Temporary ID for file naming
       
-      // Debug the data being passed
-      console.log('🔍 DEBUG: BatchRegistration data:', {
-        account: account,
-        formData: formData,
+      logger.debug('BatchRegistration data', {
+        hasAccount: Boolean(account),
+        cropType: sanitizeString(formData.cropType, 100),
         tempBatchId: tempBatchId.toString()
       });
       
@@ -232,17 +239,21 @@ export const BatchRegistration = () => {
       let currentProfile = profile;
       let farmerName = 'User';
       
-      if (!currentProfile) {
+      if (!currentProfile && user?.id) {
         try {
-          const { data: profileData } = await (supabase as any)
+          const { data: profileData, error: profileError } = await supabase
             .from('profiles')
             .select('id, full_name, user_type')
-            .eq('user_id', user?.id)
-            .single();
+            .eq('user_id', user.id)
+            .maybeSingle();
           
-          currentProfile = profileData;
+          if (profileError) {
+            logger.warn('Could not fetch profile', { error: profileError.message, userId: user.id });
+          } else {
+            currentProfile = profileData;
+          }
         } catch (error) {
-          console.warn('Could not fetch profile:', error);
+          logger.warn('Error fetching profile', error);
         }
       }
       
@@ -265,7 +276,7 @@ export const BatchRegistration = () => {
         soilData: soilData
       };
       
-      console.log('🔍 DEBUG: Harvest data being passed:', harvestData);
+      logger.debug('Harvest data for certificate', { batchId: harvestData.batchId, cropType: harvestData.cropType });
       
       // Upload certificate with retry logic
       let pdfBlob: Blob;
@@ -273,13 +284,23 @@ export const BatchRegistration = () => {
       let ipfsHash: string;
       
       try {
-        const result = await singleStepGroupManager.uploadHarvestCertificate(harvestData);
+        const result = await ipfsManager.uploadHarvestCertificate({
+          batchId: sanitizeString(harvestData.batchId, 100),
+          farmerName: sanitizeString(harvestData.farmerName, 255),
+          cropType: sanitizeString(harvestData.cropType, 100),
+          variety: sanitizeString(harvestData.variety, 100),
+          harvestQuantity: validateNumber(harvestData.harvestQuantity, 0, Infinity, 0),
+          harvestDate: harvestData.harvestDate,
+          grading: sanitizeString(harvestData.grading, 100) || 'Standard',
+          certification: sanitizeString(harvestData.certification, 100) || 'Standard',
+          pricePerKg: validateNumber(harvestData.pricePerKg, 0, Infinity, 0)
+        });
         pdfBlob = result.pdfBlob;
         groupId = result.groupId;
         ipfsHash = result.ipfsHash;
-        console.log('✅ Certificate uploaded successfully:', { groupId, ipfsHash });
-      } catch (uploadError: any) {
-        console.error('❌ Certificate upload failed:', uploadError);
+        logger.debug('Certificate uploaded successfully', { groupId, ipfsHash });
+      } catch (uploadError: unknown) {
+        logger.error('Certificate upload failed', uploadError);
         // Don't fail the entire registration - continue without certificate
         toast({
           variant: "destructive",
@@ -328,27 +349,43 @@ export const BatchRegistration = () => {
       };
 
       // Register on blockchain
-      console.log('🔍 DEBUG: Registering batch on blockchain:', batchInput);
+      logger.debug('Registering batch on blockchain', { 
+        cropType: sanitizeString(batchInput.crop, 100),
+        variety: sanitizeString(batchInput.variety, 100),
+        quantity: batchInput.harvestQuantity
+      });
       const receipt = await registerBatch(batchInput);
       
       if (receipt) {
-        console.log('Transaction receipt:', receipt);
-        console.log('Event logs:', receipt.logs);
+        logger.debug('Transaction receipt received', { 
+          transactionHash: receipt.hash,
+          blockNumber: receipt.blockNumber,
+          logCount: receipt.logs?.length || 0
+        });
         
         // Extract batch ID from events - BatchRegistered event signature
         const batchRegisteredEventSignature = ethers.id('BatchRegistered(uint256,address,string,string,uint256)');
-        console.log('Looking for event signature:', batchRegisteredEventSignature);
-        console.log('All event logs:', receipt.logs.map((log: any) => ({
+        logger.debug('Looking for batch registered event', { eventSignature: batchRegisteredEventSignature });
+        
+        interface EventLog {
+          address: string;
+          topics: string[];
+          data: string;
+        }
+        
+        const eventLogs: EventLog[] = (receipt.logs || []).map((log: { address: string; topics: string[]; data: string }) => ({
           address: log.address,
           topics: log.topics,
           data: log.data
-        })));
+        }));
+        
+        logger.debug('Event logs found', { count: eventLogs.length });
         
         const batchRegisteredEvent = receipt.logs.find(
-          (log: any) => log.topics[0] === batchRegisteredEventSignature
+          (log: { topics: string[] }) => log.topics?.[0] === batchRegisteredEventSignature
         );
         
-        console.log('Found batch registered event:', batchRegisteredEvent);
+        logger.debug('Batch registered event search', { found: Boolean(batchRegisteredEvent) });
         
         let extractedBatchId = null;
         if (batchRegisteredEvent) {
@@ -360,44 +397,44 @@ export const BatchRegistration = () => {
           batchData.ipfsHash = certificateIpfsHash;
           
           // Record harvest transaction on blockchain
-          console.log('🔍 DEBUG: Recording harvest transaction on blockchain...');
+          logger.debug('Recording harvest transaction on blockchain', { batchId: extractedBatchId });
           if (signer) {
             try {
               blockchainTransactionManager.updateSigner(signer);
               const harvestTransaction = await blockchainTransactionManager.recordHarvestTransaction(
                 extractedBatchId.toString(),
                 user?.id || '', // Farmer address
-                formData.cropType,
-                formData.variety,
-                parseFloat(formData.harvestQuantity),
-                parseFloat(formData.pricePerKg),
-                certificateIpfsHash
+                sanitizeString(formData.cropType, 100),
+                sanitizeString(formData.variety, 100),
+                validateNumber(formData.harvestQuantity, 0, Infinity, 0),
+                validateNumber(formData.pricePerKg, 0, Infinity, 0),
+                sanitizeString(certificateIpfsHash, 100)
               );
-              console.log('🔍 DEBUG: Harvest transaction recorded:', harvestTransaction);
+              logger.debug('Harvest transaction recorded', { batchId: extractedBatchId });
             } catch (blockchainError) {
-              console.error('🔍 DEBUG: Blockchain harvest transaction failed:', blockchainError);
+              logger.error('Blockchain harvest transaction failed', blockchainError);
               // Continue with database operations even if blockchain fails
-              console.log('🔍 DEBUG: Continuing with database operations despite blockchain error');
+              logger.debug('Continuing with database operations despite blockchain error');
             }
           } else {
-            console.log('🔍 DEBUG: No signer available for blockchain transaction');
+            logger.debug('No signer available for blockchain transaction');
           }
         } else {
           // Try to decode events using contract interface
           try {
             const contract = new ethers.Contract(CONTRACT_ADDRESS, AgriTraceABI.abi, provider);
-            const decodedEvents = receipt.logs.map((log: any) => {
+            const decodedEvents = (receipt.logs || []).map((log: { topics: string[]; data: string; address: string }) => {
               try {
                 return contract.interface.parseLog(log);
               } catch (e) {
                 return null;
               }
-            }).filter(Boolean);
+            }).filter((event): event is { name: string; args: { batchId: bigint } } => event !== null);
             
-            console.log('Decoded events:', decodedEvents);
+            logger.debug('Decoded events', { count: decodedEvents.length });
             
             const batchRegisteredEvent = decodedEvents.find(
-              (event: any) => event?.name === 'BatchRegistered'
+              (event) => event?.name === 'BatchRegistered'
             );
             
             if (batchRegisteredEvent) {
@@ -405,33 +442,30 @@ export const BatchRegistration = () => {
               setBatchId(extractedBatchId);
               batchData.id = extractedBatchId;
               batchData.ipfsHash = certificateIpfsHash;
-              console.log('Found batch ID using contract interface:', extractedBatchId);
+              logger.debug('Found batch ID using contract interface', { batchId: extractedBatchId });
             } else {
               // Try alternative event signatures
               const alternativeSignatures = [
-                ethers.id('BatchRegistered(uint256,address,string,string,uint256)'),
-                ethers.id('BatchRegistered(uint256,address,string,string,uint256)'),
-                // Try without indexed parameters
                 ethers.id('BatchRegistered(uint256,address,string,string,uint256)')
               ];
               
-              let foundEvent = null;
+              let foundEvent: { topics: string[] } | null = null;
               for (const sig of alternativeSignatures) {
-                foundEvent = receipt.logs.find((log: any) => log.topics[0] === sig);
+                foundEvent = receipt.logs.find((log: { topics: string[] }) => log.topics?.[0] === sig) || null;
                 if (foundEvent) break;
               }
               
-              if (foundEvent) {
+              if (foundEvent && foundEvent.topics?.[1]) {
                 extractedBatchId = parseInt(foundEvent.topics[1], 16);
                 setBatchId(extractedBatchId);
                 batchData.id = extractedBatchId;
                 batchData.ipfsHash = certificateIpfsHash;
-                console.log('Found batch ID using alternative signature:', extractedBatchId);
+                logger.debug('Found batch ID using alternative signature', { batchId: extractedBatchId });
               } else {
                 // Final fallback: use timestamp as temporary ID
                 extractedBatchId = Math.floor(Date.now() / 1000);
                 setBatchId(extractedBatchId);
-                console.warn('Could not extract batch ID from any event, using timestamp as fallback');
+                logger.warn('Could not extract batch ID from any event, using timestamp as fallback', { batchId: extractedBatchId });
                 
                 // Update the batch data with the fallback ID
                 batchData.id = extractedBatchId;
@@ -439,11 +473,11 @@ export const BatchRegistration = () => {
               }
             }
           } catch (decodeError) {
-            console.error('Error decoding events:', decodeError);
+            logger.error('Error decoding events', decodeError);
             // Final fallback: use timestamp as temporary ID
             extractedBatchId = Math.floor(Date.now() / 1000);
             setBatchId(extractedBatchId);
-            console.warn('Could not decode events, using timestamp as fallback');
+            logger.warn('Could not decode events, using timestamp as fallback', { batchId: extractedBatchId });
             
             // Update the batch data with the fallback ID
             batchData.id = extractedBatchId;
@@ -452,121 +486,144 @@ export const BatchRegistration = () => {
         }
 
         // Step 5: Save to Supabase for local reference
-        // CACHE BUST: Fixed marketplace_availability references - use marketplace table only
-        // TIMESTAMP: 2025-09-28T18:24:00Z - Force browser to use latest code
-        let insertedBatch: any = null;
-        let currentProfile: any = null;
+        let insertedBatch: Tables<'batches'> | null = null;
+        let currentProfile: Tables<'profiles'> | null = profile || null;
         
         try {
-          console.log('🔍 DEBUG: Looking up profile for user:', user?.id);
+          logger.debug('Looking up profile for user', { userId: user?.id });
           
           // Use profile from context if available, otherwise fetch
-          currentProfile = profile;
-          if (!currentProfile) {
-            const { data: profileData, error: profileError } = await (supabase as any)
+          if (!currentProfile && user?.id) {
+            const { data: profileData, error: profileError } = await supabase
               .from('profiles')
               .select('id, full_name, user_type')
-              .eq('user_id', user?.id)
-              .single();
+              .eq('user_id', user.id)
+              .maybeSingle();
 
             if (profileError) {
-              console.error('❌ Profile lookup error:', profileError);
-              console.warn('⚠️ Profile lookup failed, skipping database save');
-              // Continue without database save
+              logger.error('Profile lookup error', { error: profileError.message, userId: user.id });
               throw new Error('Profile not found. Please ensure your profile is set up correctly.');
             }
+            
             currentProfile = profileData;
           }
-          
-          console.log('✅ Profile found:', currentProfile);
           
           // Check if profile exists
           if (!currentProfile || !currentProfile.id) {
             throw new Error('Profile not found. Please ensure your profile is set up correctly.');
           }
           
+          logger.debug('Profile found', { profileId: currentProfile.id, userType: currentProfile.user_type });
+          
           // Only insert fields that exist in the current database schema
           // Determine user type and set farmer_id and current_owner accordingly
-          const userType = currentProfile?.user_type || user?.user_metadata?.user_type || 'farmer';
+          const userType = currentProfile.user_type || user?.user_metadata?.user_type || 'farmer';
             
-            const batchData = {
-          farmer_id: currentProfile.id, // Keep farmer_id as the profile ID (works for both farmers and distributors)
-          crop_type: formData.cropType,
-          variety: formData.variety,
-          harvest_quantity: parseFloat(formData.harvestQuantity),
-          sowing_date: formData.sowingDate,
-          harvest_date: formData.harvestDate,
-          price_per_kg: parseFloat(formData.pricePerKg),
-          total_price: parseFloat(formData.harvestQuantity) * parseFloat(formData.pricePerKg),
-          grading: formData.grading,
-              freshness_duration: parseInt(formData.freshnessDuration),
-          certification: formData.certification || 'Standard',
-          status: 'available',
-          current_owner: currentProfile.id, // Set current owner to the person registering
-          group_id: groupId, // Store the group ID
-          // Store analysis data as JSON
-          crop_analysis: analysisData ? JSON.stringify(analysisData) : null,
-          soil_data: soilData ? JSON.stringify(soilData) : null,
-            };
+          const batchInsertData: Partial<Tables<'batches'>> = {
+            farmer_id: currentProfile.id,
+            crop_type: sanitizeString(formData.cropType, 100),
+            variety: sanitizeString(formData.variety, 100),
+            harvest_quantity: validateNumber(formData.harvestQuantity, 0, Infinity, 0),
+            sowing_date: sanitizeString(formData.sowingDate, 50),
+            harvest_date: sanitizeString(formData.harvestDate, 50),
+            price_per_kg: validateNumber(formData.pricePerKg, 0, Infinity, 0),
+            grading: sanitizeString(formData.grading, 100) || 'Standard',
+            freshness_duration: validateInteger(formData.freshnessDuration, 1, 365, 7),
+            certification: sanitizeString(formData.certification, 100) || 'Standard',
+            status: 'available',
+            current_owner: currentProfile.id,
+            group_id: sanitizeString(groupId, 100),
+          };
 
-            console.log('Inserting batch data:', batchData);
-            
-            const { data: batchResult, error: insertError } = await (supabase as any)
-              .from('batches')
-              .insert(batchData)
-        .select()
-        .single();
-
-            if (insertError) {
-              console.error('Database insertion error:', insertError);
-              throw new Error(`Database error: ${insertError.message}`);
+          // Store analysis data as JSON if available
+          if (analysisData) {
+            try {
+              (batchInsertData as { crop_analysis?: string }).crop_analysis = JSON.stringify(analysisData);
+            } catch (e) {
+              logger.warn('Failed to stringify analysis data', { error: e });
             }
+          }
 
-            insertedBatch = batchResult;
-            console.log('Batch inserted successfully:', insertedBatch);
-
-            // Step 6: Add to marketplace table
-            // Determine seller type based on user's role
-            const sellerType = userType === 'distributor' ? 'distributor' : 'farmer';
-            
-            const marketplaceData = {
-              batch_id: insertedBatch.id,
-              current_seller_id: currentProfile.id,
-              current_seller_type: sellerType,
-              price: parseFloat(formData.harvestQuantity) * parseFloat(formData.pricePerKg),
-              quantity: parseFloat(formData.harvestQuantity),
-              status: 'available'
-            };
-
-            console.log('🔍 DEBUG: Inserting marketplace data:', marketplaceData);
-            console.log('🔍 DEBUG: Profile ID:', currentProfile.id);
-            console.log('🔍 DEBUG: User Type:', userType);
-            console.log('🔍 DEBUG: Seller Type:', sellerType);
-            console.log('🔍 DEBUG: Batch ID:', insertedBatch.id);
-
-            const { data: marketplaceResult, error: marketplaceError } = await (supabase as any)
-              .from('marketplace')
-              .insert(marketplaceData)
-              .select()
-              .single();
-
-            if (marketplaceError) {
-              console.error('❌ Marketplace insertion error:', marketplaceError);
-              console.error('❌ Marketplace data that failed:', marketplaceData);
-              console.error('❌ Profile ID being used:', currentProfile.id);
-              console.error('❌ Batch ID being used:', insertedBatch.id);
-              // Don't throw error, just log it so batch creation still succeeds
-              console.warn('⚠️ Marketplace insertion failed, but batch was created successfully');
-            } else {
-              console.log('✅ Batch added to marketplace successfully:', marketplaceResult);
+          if (soilData) {
+            try {
+              (batchInsertData as { soil_data?: string }).soil_data = JSON.stringify(soilData);
+            } catch (e) {
+              logger.warn('Failed to stringify soil data', { error: e });
             }
+          }
+          
+          logger.debug('Inserting batch data', { batchId: extractedBatchId, groupId });
+          
+          const { data: batchResult, error: insertError } = await supabase
+            .from('batches')
+            .insert(batchInsertData)
+            .select()
+            .maybeSingle();
+
+          if (insertError || !batchResult) {
+            logger.error('Database insertion error', { error: insertError, batchData: batchInsertData });
+            throw new Error(insertError ? `Database error: ${insertError.message}` : 'Failed to insert batch');
+          }
+
+          insertedBatch = batchResult;
+          logger.debug('Batch inserted successfully', { batchId: insertedBatch.id, groupId });
+
+          // Step 6: Add to marketplace table
+          // Determine seller type based on user's role
+          const sellerType = userType === 'distributor' ? 'distributor' : 'farmer';
+          
+          // Marketplace table structure (not in generated types, using type assertion)
+          interface MarketplaceRow {
+            batch_id: string;
+            current_seller_id: string;
+            current_seller_type: string;
+            price: number;
+            quantity: number;
+            status: string;
+            id?: string;
+            created_at?: string;
+          }
+          
+          const marketplaceData: MarketplaceRow = {
+            batch_id: insertedBatch.id,
+            current_seller_id: currentProfile.id,
+            current_seller_type: sellerType,
+            price: validateNumber(formData.harvestQuantity, 0, Infinity, 0) * validateNumber(formData.pricePerKg, 0, Infinity, 0),
+            quantity: validateNumber(formData.harvestQuantity, 0, Infinity, 0),
+            status: 'available'
+          };
+
+          logger.debug('Inserting marketplace data', {
+            batchId: insertedBatch.id,
+            profileId: currentProfile.id,
+            userType,
+            sellerType
+          });
+
+          const { data: marketplaceResult, error: marketplaceError } = await supabase
+            .from('marketplace')
+            .insert(marketplaceData)
+            .select()
+            .maybeSingle();
+
+          if (marketplaceError) {
+            logger.error('Marketplace insertion error', {
+              error: marketplaceError.message,
+              batchId: insertedBatch.id,
+              profileId: currentProfile.id
+            });
+            // Don't throw error, just log it so batch creation still succeeds
+            logger.warn('Marketplace insertion failed, but batch was created successfully');
+          } else {
+            logger.debug('Batch added to marketplace successfully', { marketplaceId: marketplaceResult?.id });
+          }
         } catch (dbError) {
-          console.warn('Failed to save to local database:', dbError);
+          logger.error('Failed to save to local database', dbError);
           // Don't fail the entire process if local DB save fails
         }
 
       // Group-based system: Certificate is already created and uploaded to group
-      console.log(`Batch registered with Group ID: ${groupId}`);
+      logger.debug('Batch registered with Group ID', { groupId, batchId: extractedBatchId });
 
       // Generate QR code for the batch registration
       // Use insertedBatch.id if available, otherwise use extractedBatchId
@@ -578,27 +635,29 @@ export const BatchRegistration = () => {
           const { generateFarmerRegistrationQR } = await import('@/features/qr-code/utils/qrCodeGenerator');
           const qrCodeDataURL = await generateFarmerRegistrationQR({
             batchId: batchIdForQR.toString(),
-            cropType: formData.cropType,
-            variety: formData.variety,
-            harvestDate: formData.harvestDate,
-            farmerId: farmerIdForQR,
-            ipfsHash: groupId // Using group ID as reference
+            cropType: sanitizeString(formData.cropType, 100),
+            variety: sanitizeString(formData.variety, 100),
+            harvestDate: sanitizeString(formData.harvestDate, 50),
+            farmerId: sanitizeString(farmerIdForQR, 100),
+            ipfsHash: sanitizeString(groupId, 100)
           });
           
-          console.log('✅ QR code generated for batch registration');
+          logger.debug('QR code generated for batch registration', { batchId: batchIdForQR });
           
           // Store QR code in localStorage for later access
-          localStorage.setItem(`batch_qr_${batchIdForQR}`, qrCodeDataURL);
+          try {
+            localStorage.setItem(`batch_qr_${sanitizeString(batchIdForQR.toString(), 100)}`, qrCodeDataURL);
+          } catch (storageError) {
+            logger.warn('Failed to store QR code in localStorage', { error: storageError });
+          }
         } catch (qrError) {
-          console.error('❌ QR code generation failed:', qrError);
+          logger.error('QR code generation failed', qrError);
           // Continue even if QR code generation fails
         }
       } else {
-        console.warn('⚠️ Skipping QR code generation: missing batchId or farmerId', {
-          batchId: batchIdForQR,
-          farmerId: farmerIdForQR,
-          insertedBatch: insertedBatch,
-          currentProfile: currentProfile
+        logger.warn('Skipping QR code generation: missing batchId or farmerId', {
+          batchId: batchIdForQR ? 'present' : 'missing',
+          farmerId: farmerIdForQR ? 'present' : 'missing'
         });
       }
 
@@ -623,11 +682,11 @@ export const BatchRegistration = () => {
       });
       } // Close if (receipt) block
     } catch (error) {
-      console.error('Registration error:', error);
+      logger.error('Registration error', error);
       toast({
         variant: "destructive",
         title: "Registration failed",
-        description: error instanceof Error ? error.message : "Please try again later.",
+        description: error instanceof Error ? sanitizeError(error) : "Please try again later.",
       });
       setStep('form');
     } finally {

@@ -1,6 +1,9 @@
 import { useState, useEffect } from 'react';
+import { logger } from '@/lib/logger';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
+import { Tables } from '@/integrations/supabase/types';
+import { sanitizeError } from '@/lib/security';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -31,10 +34,10 @@ export const FarmerDashboard = () => {
     totalRevenue: 0,
     avgQualityScore: 0
   });
-  const [recentBatches, setRecentBatches] = useState<any[]>([]);
+  const [recentBatches, setRecentBatches] = useState<Tables<'batches'>[]>([]);
   const [loading, setLoading] = useState(true);
-  const [selectedBatchForQR, setSelectedBatchForQR] = useState<any>(null);
-  const [showCertificateQR, setShowCertificateQR] = useState<any>(null);
+  const [selectedBatchForQR, setSelectedBatchForQR] = useState<Tables<'batches'> | null>(null);
+  const [showCertificateQR, setShowCertificateQR] = useState<string | null>(null);
 
   useEffect(() => {
     if (user) {
@@ -45,25 +48,40 @@ export const FarmerDashboard = () => {
   const fetchDashboardData = async () => {
     try {
       // Get farmer profile
-      const { data: profile } = await (supabase as any)
+      const { data: profile, error: profileError } = await supabase
         .from('profiles')
         .select('id')
-        .eq('user_id', user?.id)
-        .single();
+        .eq('user_id', user?.id || '')
+        .single<Pick<Tables<'profiles'>, 'id'>>();
+      
+      if (profileError) {
+        logger.error('Error fetching farmer profile', profileError);
+      }
 
       if (profile) {
         // Fetch batches for this farmer
-        const { data: batches } = await (supabase as any)
+        const { data: batches, error: batchesError } = await supabase
           .from('batches')
           .select('*')
-          .eq('farmer_id', profile.id);
+          .eq('farmer_id', profile.id)
+          .returns<Tables<'batches'>[]>();
+        
+        if (batchesError) {
+          logger.error('Error fetching batches for farmer', batchesError);
+        }
 
         if (batches) {
           const totalBatches = batches.length;
-          const activeBatches = batches.filter((b: any) => b.status === 'available').length;
-          const totalRevenue = batches.reduce((sum: number, batch: any) => sum + (batch.total_price || 0), 0);
-          const avgQualityScore = batches.length > 0 
-            ? Math.round(batches.reduce((sum: number, batch: any) => sum + (batch.quality_score || 0), 0) / batches.length)
+          const activeBatches = batches.filter((b: Tables<'batches'>) => b.status === 'available').length;
+          const totalRevenue = batches.reduce((sum: number, batch: Tables<'batches'>) => {
+            const batchAny = batch as Record<string, unknown>;
+            return sum + (typeof batchAny.total_price === 'number' ? batchAny.total_price : 0);
+          }, 0);
+          const avgQualityScore = batches.length > 0
+            ? Math.round(batches.reduce((sum: number, batch: Tables<'batches'>) => {
+                const batchAny = batch as Record<string, unknown>;
+                return sum + (typeof batchAny.quality_score === 'number' ? batchAny.quality_score : 0);
+              }, 0) / batches.length)
             : 0;
 
           setStats({
@@ -77,7 +95,7 @@ export const FarmerDashboard = () => {
         }
       }
     } catch (error) {
-      console.error('Error fetching dashboard data:', error);
+      logger.error('Error fetching dashboard data', error);
     } finally {
       setLoading(false);
     }

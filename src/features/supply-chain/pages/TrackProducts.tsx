@@ -29,15 +29,31 @@ import {
 import { useToast } from '@/components/ui/use-toast';
 import { downloadPDFCertificate } from '@/features/certificate/utils/certificateGenerator';
 import { ComprehensiveVerificationSystem } from '@/features/verification/components/ComprehensiveVerificationSystem';
+import { logger } from '@/lib/logger';
+import { sanitizeError, sanitizeString } from '@/lib/security';
+import { Tables } from '@/integrations/supabase/types';
 
 export const TrackProducts = () => {
   const [batchId, setBatchId] = useState('');
-  const [batch, setBatch] = useState<any>(null);
-  const [batches, setBatches] = useState<any[]>([]); // For group results
-  const [certificates, setCertificates] = useState<any[]>([]); // Certificates in group
+  interface BatchWithProfile extends Tables<'batches'> {
+    profiles?: Pick<Tables<'profiles'>, 'full_name' | 'farm_location'> | null;
+  }
+  
+  const [batch, setBatch] = useState<BatchWithProfile | null>(null);
+  const [batches, setBatches] = useState<BatchWithProfile[]>([]); // For group results
+  const [certificates, setCertificates] = useState<Array<Record<string, unknown>>>([]); // Certificates in group
   const [loading, setLoading] = useState(false);
   const [uploadedImage, setUploadedImage] = useState<string | null>(null);
-  const [verificationResult, setVerificationResult] = useState<any>(null);
+  interface VerificationResult {
+    success: boolean;
+    batchId?: string;
+    groupId?: string;
+    certificates?: Array<Record<string, unknown>>;
+    error?: string;
+    [key: string]: unknown;
+  }
+  
+  const [verificationResult, setVerificationResult] = useState<VerificationResult | null>(null);
   const [verifying, setVerifying] = useState(false);
   const [isGroupSearch, setIsGroupSearch] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -62,7 +78,7 @@ export const TrackProducts = () => {
         parsedQR = JSON.parse(searchId);
         if (parsedQR.batchId || parsedQR.id || parsedQR.groupId || parsedQR.group_id) {
           searchId = parsedQR.batchId || parsedQR.id || parsedQR.groupId || parsedQR.group_id;
-          console.log('✅ Parsed QR code data, extracted ID:', searchId);
+          logger.debug('✅ Parsed QR code data, extracted ID:', searchId);
         }
       } catch (e) {
         // Not JSON, continue with original searchId
@@ -74,7 +90,7 @@ export const TrackProducts = () => {
       
       if (isGroupId) {
         // Search by group_id - fetch ALL batches in this group
-        console.log('🔍 Searching by Group ID:', searchId);
+        logger.debug('🔍 Searching by Group ID:', searchId);
         setIsGroupSearch(true);
         
         const { data: groupBatches, error: groupError } = await supabase
@@ -107,7 +123,7 @@ export const TrackProducts = () => {
         // First, try by UUID batch ID (most common from QR codes)
         const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(searchId);
         if (isUUID) {
-          console.log('🔍 Trying UUID batch ID:', searchId);
+          logger.debug('🔍 Trying UUID batch ID:', searchId);
           const { data, error } = await supabase
             .from('batches')
             .select('*')
@@ -116,13 +132,13 @@ export const TrackProducts = () => {
           
           if (!error && data && data.length > 0) {
             batchData = data[0];
-            console.log('✅ Found batch by UUID:', batchData.id);
+            logger.debug('✅ Found batch by UUID:', batchData.id);
           }
         }
         
         // Try by integer ID (if it's a number)
         if (!batchData && !isNaN(Number(searchId)) && Number(searchId) > 0) {
-          console.log('🔍 Trying integer batch ID:', searchId);
+          logger.debug('🔍 Trying integer batch ID:', searchId);
           const { data, error } = await supabase
             .from('batches')
             .select('*')
@@ -131,13 +147,13 @@ export const TrackProducts = () => {
           
           if (!error && data && data.length > 0) {
             batchData = data[0];
-            console.log('✅ Found batch by integer ID:', batchData.id);
+            logger.debug('✅ Found batch by integer ID:', batchData.id);
           }
         }
         
         // Try by blockchain IDs
         if (!batchData) {
-          console.log('🔍 Trying blockchain IDs:', searchId);
+          logger.debug('🔍 Trying blockchain IDs:', searchId);
           const { data, error } = await supabase
             .from('batches')
             .select('*')
@@ -146,13 +162,13 @@ export const TrackProducts = () => {
           
           if (!error && data && data.length > 0) {
             batchData = data[0];
-            console.log('✅ Found batch by blockchain ID:', batchData.id);
+            logger.debug('✅ Found batch by blockchain ID:', batchData.id);
           }
         }
         
         // Try by IPFS hash
         if (!batchData && searchId.length > 20) {
-          console.log('🔍 Trying IPFS hash:', searchId);
+          logger.debug('🔍 Trying IPFS hash:', searchId);
           const { data, error } = await supabase
             .from('batches')
             .select('*')
@@ -161,7 +177,7 @@ export const TrackProducts = () => {
           
           if (!error && data && data.length > 0) {
             batchData = data[0];
-            console.log('✅ Found batch by IPFS hash:', batchData.id);
+            logger.debug('✅ Found batch by IPFS hash:', batchData.id);
           }
         }
         
@@ -178,7 +194,7 @@ export const TrackProducts = () => {
             description: "Batch information loaded successfully.",
           });
         } else {
-          console.error('❌ No batch found. Searched with:', {
+          logger.error('❌ No batch found. Searched with:', {
             searchId,
             isUUID,
             isNumber: !isNaN(Number(searchId)),
@@ -189,7 +205,7 @@ export const TrackProducts = () => {
         }
       }
     } catch (error) {
-      console.error('Search error:', error);
+      logger.error('Search error:', error);
       toast({
         variant: "destructive",
         title: "Not found",
@@ -205,7 +221,7 @@ export const TrackProducts = () => {
 
   const fetchGroupCertificates = async (groupId: string): Promise<number> => {
     try {
-      console.log('🔍 Fetching certificates for group:', groupId);
+      logger.debug('🔍 Fetching certificates for group:', groupId);
       
       // Fetch from group_files table
       const { data: groupFiles, error: filesError } = await supabase
@@ -215,18 +231,18 @@ export const TrackProducts = () => {
         .order('created_at', { ascending: true });
       
       if (!filesError && groupFiles && groupFiles.length > 0) {
-        console.log(`✅ Found ${groupFiles.length} certificates in database`);
+        logger.debug(`✅ Found ${groupFiles.length} certificates in database`);
         setCertificates(groupFiles);
         return groupFiles.length;
       }
       
       // If no files in database, try using SingleStepGroupManager
       try {
-                  const { singleStepGroupManager } = await import('@/features/ipfs/utils/singleStepGroupManager');
-        const pinataCertificates = await singleStepGroupManager.getGroupCertificates(groupId);
+                  const { ipfsManager } = await import('@/features/ipfs/utils/ipfsManager');
+        const pinataCertificates = await ipfsManager.getGroupCertificates(groupId);
         
         if (pinataCertificates && pinataCertificates.length > 0) {
-          console.log(`✅ Found ${pinataCertificates.length} certificates from Pinata`);
+          logger.debug(`✅ Found ${pinataCertificates.length} certificates from Pinata`);
           // Transform Pinata format to our format
           const transformed = pinataCertificates.map((cert: any) => ({
             id: cert.ipfs_pin_hash || cert.id,
@@ -241,13 +257,13 @@ export const TrackProducts = () => {
           return transformed.length;
         }
       } catch (pinataError) {
-        console.warn('Could not fetch from Pinata:', pinataError);
+        logger.warn('Could not fetch from Pinata:', pinataError);
       }
       
       setCertificates([]);
       return 0;
     } catch (error) {
-      console.error('Error fetching group certificates:', error);
+      logger.error('Error fetching group certificates:', error);
       setCertificates([]);
       return 0;
     }
@@ -287,7 +303,7 @@ export const TrackProducts = () => {
           description: "The certificate has been downloaded successfully.",
         });
       } catch (error) {
-        console.error('Error downloading certificate:', error);
+        logger.error('Error downloading certificate:', error);
         toast({
           variant: "destructive",
           title: "Download Failed",
@@ -379,7 +395,7 @@ export const TrackProducts = () => {
         });
       }
     } catch (error) {
-      console.error('Error verifying image:', error);
+      logger.error('Error verifying image:', error);
       setVerificationResult({
         isValid: false,
         message: `Verification failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
@@ -400,13 +416,13 @@ export const TrackProducts = () => {
       });
       
       if (result && result.data) {
-        console.log('✅ QR Code detected:', result.data);
+        logger.debug('✅ QR Code detected:', result.data);
         return result.data;
       }
       
       return null;
     } catch (error) {
-      console.error('Error extracting QR code:', error);
+      logger.error('Error extracting QR code:', error);
       // If QR scanner fails, try to extract text from image (OCR would be needed)
       return null;
     }
@@ -420,7 +436,7 @@ export const TrackProducts = () => {
       
       try {
         parsedData = JSON.parse(qrData);
-        console.log('✅ Parsed QR code JSON:', parsedData);
+        logger.debug('✅ Parsed QR code JSON:', parsedData);
         
         // Extract ID from parsed data
         if (parsedData.batchId) {
@@ -445,7 +461,7 @@ export const TrackProducts = () => {
         }
       }
 
-      console.log('🔍 Searching with ID:', searchId);
+      logger.debug('🔍 Searching with ID:', searchId);
 
       // Check if it's a group_id (UUID format: 8-4-4-4-12 characters with dashes)
       // UUID format: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx (36 chars)
@@ -453,7 +469,7 @@ export const TrackProducts = () => {
       
       if (isGroupId) {
         // Search by group_id - fetch ALL batches
-        console.log('🔍 Searching by Group ID:', searchId);
+        logger.debug('🔍 Searching by Group ID:', searchId);
         setIsGroupSearch(true);
         
         const { data: groupBatches, error: groupError } = await supabase
@@ -490,7 +506,7 @@ export const TrackProducts = () => {
         // First, try by UUID (most common case for batch IDs)
         const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(searchId);
         if (isUUID) {
-          console.log('🔍 Trying UUID batch ID:', searchId);
+          logger.debug('🔍 Trying UUID batch ID:', searchId);
           const { data, error } = await supabase
             .from('batches')
             .select('*')
@@ -499,13 +515,13 @@ export const TrackProducts = () => {
           
           if (!error && data && data.length > 0) {
             batchData = data[0];
-            console.log('✅ Found batch by UUID:', batchData.id);
+            logger.debug('✅ Found batch by UUID:', batchData.id);
           }
         }
         
         // Try by integer ID (if it's a number)
         if (!batchData && !isNaN(Number(searchId)) && Number(searchId) > 0) {
-          console.log('🔍 Trying integer batch ID:', searchId);
+          logger.debug('🔍 Trying integer batch ID:', searchId);
           const { data, error } = await supabase
             .from('batches')
             .select('*')
@@ -514,13 +530,13 @@ export const TrackProducts = () => {
           
           if (!error && data && data.length > 0) {
             batchData = data[0];
-            console.log('✅ Found batch by integer ID:', batchData.id);
+            logger.debug('✅ Found batch by integer ID:', batchData.id);
           }
         }
         
         // Try by blockchain IDs
         if (!batchData) {
-          console.log('🔍 Trying blockchain IDs:', searchId);
+          logger.debug('🔍 Trying blockchain IDs:', searchId);
           const { data, error } = await supabase
             .from('batches')
             .select('*')
@@ -529,13 +545,13 @@ export const TrackProducts = () => {
           
           if (!error && data && data.length > 0) {
             batchData = data[0];
-            console.log('✅ Found batch by blockchain ID:', batchData.id);
+            logger.debug('✅ Found batch by blockchain ID:', batchData.id);
           }
         }
         
         // Try by group_id (in case QR code has group ID but not UUID format)
         if (!batchData) {
-          console.log('🔍 Trying group_id:', searchId);
+          logger.debug('🔍 Trying group_id:', searchId);
           const { data, error } = await supabase
             .from('batches')
             .select('*')
@@ -544,13 +560,13 @@ export const TrackProducts = () => {
           
           if (!error && data && data.length > 0) {
             batchData = data[0];
-            console.log('✅ Found batch by group_id:', batchData.id);
+            logger.debug('✅ Found batch by group_id:', batchData.id);
           }
         }
         
         // Try by IPFS hash
         if (!batchData && searchId.length > 20) {
-          console.log('🔍 Trying IPFS hash:', searchId);
+          logger.debug('🔍 Trying IPFS hash:', searchId);
           const { data, error } = await supabase
             .from('batches')
             .select('*')
@@ -559,7 +575,7 @@ export const TrackProducts = () => {
           
           if (!error && data && data.length > 0) {
             batchData = data[0];
-            console.log('✅ Found batch by IPFS hash:', batchData.id);
+            logger.debug('✅ Found batch by IPFS hash:', batchData.id);
           }
         }
 
@@ -584,7 +600,7 @@ export const TrackProducts = () => {
             description: "Certificate verified and batch information loaded.",
           });
         } else {
-          console.error('❌ No batch found. Searched with:', {
+          logger.error('❌ No batch found. Searched with:', {
             searchId,
             isUUID,
             isNumber: !isNaN(Number(searchId)),
@@ -595,7 +611,7 @@ export const TrackProducts = () => {
         }
       }
     } catch (error) {
-      console.error('Error verifying QR code data:', error);
+      logger.error('Error verifying QR code data:', error);
       setVerificationResult({
         isValid: false,
         message: `Verification failed: ${error instanceof Error ? error.message : 'Unknown error'}`,

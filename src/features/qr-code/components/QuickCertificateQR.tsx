@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { logger } from '@/lib/logger';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -41,7 +42,7 @@ export const QuickCertificateQR: React.FC<QuickCertificateQRProps> = ({
       const qrCode = await generateCertificateQR(ipfsHash);
       setQrCodeDataURL(qrCode);
     } catch (error) {
-      console.error('Error generating QR code:', error);
+      logger.error('Error generating QR code:', error);
       toast({
         variant: "destructive",
         title: "Error",

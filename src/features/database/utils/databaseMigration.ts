@@ -1,4 +1,5 @@
 import { supabase } from '@/integrations/supabase/client';
+import { logger } from '@/lib/logger';
 
 /**
  * Database Migration Script
@@ -6,7 +7,7 @@ import { supabase } from '@/integrations/supabase/client';
  */
 export const createTransactionsTable = async (): Promise<void> => {
   try {
-    console.log('Creating transactions table...');
+    logger.debug('Creating transactions table...');
     
     // SQL to create the transactions table
     const createTableSQL = `
@@ -34,8 +35,8 @@ export const createTransactionsTable = async (): Promise<void> => {
     // Note: This requires the table to be created manually in Supabase dashboard
     // or using the SQL editor with the provided SQL
     
-    console.log('Please create the transactions table manually in Supabase dashboard using this SQL:');
-    console.log(createTableSQL);
+    logger.debug('Please create the transactions table manually in Supabase dashboard using this SQL:');
+    logger.debug(createTableSQL);
     
     // Try to insert a test record to check if table exists
     const { error: testError } = await (supabase as any)
@@ -47,7 +48,7 @@ export const createTransactionsTable = async (): Promise<void> => {
       throw new Error('Transactions table does not exist. Please create it manually in Supabase dashboard.');
     }
 
-    console.log('Transactions table created successfully');
+    logger.debug('Transactions table created successfully');
 
     // Create indexes for better performance
     const createIndexesSQL = [
@@ -60,13 +61,13 @@ export const createTransactionsTable = async (): Promise<void> => {
       'CREATE INDEX IF NOT EXISTS idx_transactions_to_address ON transactions(to_address);'
     ];
 
-    console.log('Please also create these indexes in Supabase dashboard:');
-    createIndexesSQL.forEach(sql => console.log(sql));
+    logger.debug('Please also create these indexes in Supabase dashboard:');
+    createIndexesSQL.forEach(sql => logger.debug(sql));
 
-    console.log('Indexes will be created manually in Supabase dashboard');
+    logger.debug('Indexes will be created manually in Supabase dashboard');
 
   } catch (error) {
-    console.error('Database migration failed:', error);
+    logger.error('Database migration failed:', error);
     throw new Error('Failed to create transactions table');
   }
 };
@@ -76,7 +77,7 @@ export const createTransactionsTable = async (): Promise<void> => {
  */
 export const addInitialTransactionHashColumn = async (): Promise<void> => {
   try {
-    console.log('Adding initial_transaction_hash column to batches table...');
+    logger.debug('Adding initial_transaction_hash column to batches table...');
     
     const addColumnSQL = `
       ALTER TABLE batches 
@@ -86,14 +87,14 @@ export const addInitialTransactionHashColumn = async (): Promise<void> => {
     const { error } = await (supabase as any).rpc('exec_sql', { sql: addColumnSQL });
     
     if (error) {
-      console.error('Error adding initial_transaction_hash column:', error);
+      logger.error('Error adding initial_transaction_hash column:', error);
       throw error;
     }
 
-    console.log('initial_transaction_hash column added successfully');
+    logger.debug('initial_transaction_hash column added successfully');
 
   } catch (error) {
-    console.error('Database migration failed:', error);
+    logger.error('Database migration failed:', error);
     throw new Error('Failed to add initial_transaction_hash column');
   }
 };
@@ -103,14 +104,14 @@ export const addInitialTransactionHashColumn = async (): Promise<void> => {
  */
 export const runDatabaseMigrations = async (): Promise<void> => {
   try {
-    console.log('Starting database migrations...');
+    logger.debug('Starting database migrations...');
     
     await createTransactionsTable();
     await addInitialTransactionHashColumn();
     
-    console.log('All database migrations completed successfully');
+    logger.debug('All database migrations completed successfully');
   } catch (error) {
-    console.error('Database migrations failed:', error);
+    logger.error('Database migrations failed:', error);
     throw error;
   }
 };

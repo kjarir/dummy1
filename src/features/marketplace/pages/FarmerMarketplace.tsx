@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { logger } from '@/lib/logger';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
 import { Button } from '@/components/ui/button';
@@ -51,7 +52,7 @@ export const FarmerMarketplace = () => {
       if (error) throw error;
       setBatches(data || []);
     } catch (error) {
-      console.error('Error fetching batches:', error);
+      logger.error('Error fetching batches:', error);
     } finally {
       setLoading(false);
     }

@@ -4,6 +4,8 @@ import { Button } from '@/components/ui/button';
 import { Menu, X, Leaf, User, ShoppingCart, Shield, LogIn, LogOut, Wallet, Camera, Truck, Package, MapPin } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import { useWeb3 } from '@/features/blockchain/contexts/Web3Context';
+import { logger } from '@/lib/logger';
+import { sanitizeError } from '@/lib/security';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -50,7 +52,7 @@ export const Header = () => {
     try {
       await signOut();
     } catch (error) {
-      console.error('Error during sign out:', error);
+      logger.error('Error during sign out', error);
       // Even if signOut fails, navigate away (local state is cleared)
     } finally {
       // Always navigate to home page after sign out attempt

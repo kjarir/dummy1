@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { logger } from '@/lib/logger';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
 import { FarmerDashboard } from './FarmerDashboard';
@@ -32,11 +33,11 @@ export const UnifiedDashboard = () => {
         }
       }
       
-      console.log('🔍 User type detection:', {
+      logger.debug('User type detection', {
         fromProfile: userTypeFromProfile,
         fromMetadata: userTypeFromMetadata,
         effective: effectiveUserType,
-        profile: profile
+        profileExists: !!profile
       });
       
       setUserType(effectiveUserType);

@@ -1,6 +1,9 @@
 import { useState, useEffect, useRef } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
+import { logger } from '@/lib/logger';
+import { sanitizeError, sanitizeString, isValidPhone } from '@/lib/security';
+import { Tables } from '@/integrations/supabase/types';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -47,18 +50,11 @@ export const HelperDesk = () => {
   const isFetchingRef = useRef(false); // Prevent multiple simultaneous fetches
 
   // Removed automatic refresh - user must manually click refresh button
-  // useEffect(() => {
-  //   if ((profile as any)?.role === 'helper' || (profile as any)?.role === 'admin') {
-  //     if (!isFetchingRef.current) {
-  //       fetchCalls();
-  //     }
-  //   }
-  // }, [profile]);
 
   const fetchCalls = async () => {
     // Prevent multiple simultaneous fetches
     if (isFetchingRef.current) {
-      console.log('⏸️ Already fetching calls, skipping duplicate request');
+      logger.debug('Already fetching calls, skipping duplicate request');
       return;
     }
 
@@ -67,25 +63,9 @@ export const HelperDesk = () => {
       setLoading(true);
       setError(null);
       
-      console.log('🔄 Fetching calls from VoiceGenie API...');
+      logger.debug('Fetching calls from VoiceGenie API');
       const fetchedCalls = await fetchVoiceGenieCalls();
-      console.log('📞 Fetched calls from API:', fetchedCalls);
-      console.log('📊 Total calls fetched:', fetchedCalls.length);
-      
-      // Log each call's collectedData for debugging
-      fetchedCalls.forEach((call, index) => {
-        console.log(`📋 Call ${index + 1}:`, {
-          id: call.id,
-          phone: call.phone,
-          farmerName: call.farmerName,
-          hasCollectedData: !!call.collectedData,
-          collectedDataKeys: call.collectedData ? Object.keys(call.collectedData) : [],
-          cropType: call.collectedData?.cropType,
-          variety: call.collectedData?.variety,
-          fullCollectedData: call.collectedData ? JSON.stringify(call.collectedData, null, 2) : 'No data',
-          confidenceScore: call.confidenceScore
-        });
-      });
+      logger.debug('Fetched calls from API', { count: fetchedCalls.length });
       
       // Filter to only show calls that are not already registered/rejected
       // Show all calls, even if they don't have collectedData (they might be in progress or incomplete)
@@ -94,8 +74,7 @@ export const HelperDesk = () => {
         call.status !== 'rejected'
       );
       
-      console.log('✅ Active calls after filtering:', activeCalls.length);
-      console.log('✅ Active calls details:', activeCalls);
+      logger.debug('Active calls after filtering', { count: activeCalls.length });
       
       setCalls(activeCalls);
       
@@ -111,8 +90,8 @@ export const HelperDesk = () => {
         });
       }
     } catch (error) {
-      console.error('❌ Error fetching VoiceGenie calls:', error);
-      const errorMessage = error instanceof Error ? error.message : "Failed to fetch calls from VoiceGenie API";
+      logger.error('Error fetching VoiceGenie calls', error);
+      const errorMessage = error instanceof Error ? sanitizeError(error) : "Failed to fetch calls from VoiceGenie API";
       setError(errorMessage);
       
       toast({
@@ -174,27 +153,30 @@ export const HelperDesk = () => {
       );
 
       // Save submission record to database
-      const { error: dbError } = await (supabase as any)
+      // Note: voicegenie_submissions table may not be in generated types, using type assertion
+      const submissionData = {
+        call_id: sanitizeString(call.id, 100),
+        farmer_phone: sanitizeString(call.phone, 20),
+        farmer_name: call.farmerName ? sanitizeString(call.farmerName, 255) : null,
+        farmer_location: call.farmerLocation ? sanitizeString(call.farmerLocation, 500) : null,
+        submission_data: call.collectedData || {},
+        language: sanitizeString(call.language || 'hi', 10),
+        confidence_score: call.confidenceScore || 0.5,
+        call_recording_url: call.callRecordingUrl ? sanitizeString(call.callRecordingUrl, 500) : null,
+        status: 'registered' as const,
+        helper_id: profile?.id || null,
+        helper_notes: 'Approved and registered via Helper Desk',
+        reviewed_at: new Date().toISOString(),
+        registered_at: new Date().toISOString(),
+        batch_id: sanitizeString(result.batchId, 100)
+      };
+
+      const { error: dbError } = await supabase
         .from('voicegenie_submissions')
-        .insert({
-          call_id: call.id,
-          farmer_phone: call.phone,
-          farmer_name: call.farmerName,
-          farmer_location: call.farmerLocation,
-          submission_data: call.collectedData,
-          language: call.language || 'hi',
-          confidence_score: call.confidenceScore || 0.5,
-          call_recording_url: call.callRecordingUrl,
-          status: 'registered',
-          helper_id: profile?.id,
-          helper_notes: 'Approved and registered via Helper Desk',
-          reviewed_at: new Date().toISOString(),
-          registered_at: new Date().toISOString(),
-          batch_id: result.batchId
-        });
+        .insert(submissionData as Record<string, unknown>);
 
       if (dbError) {
-        console.warn('Failed to save submission record:', dbError);
+        logger.warn('Failed to save submission record', { error: dbError.message });
         // Don't fail the whole process if DB save fails
       }
 
@@ -207,11 +189,11 @@ export const HelperDesk = () => {
       fetchCalls();
       setIsDetailsModalOpen(false);
     } catch (error) {
-      console.error('Error registering batch:', error);
+      logger.error('Error registering batch', error);
       toast({
         variant: "destructive",
         title: "Registration Failed",
-        description: error instanceof Error ? error.message : "Failed to register batch. Please try again.",
+        description: error instanceof Error ? sanitizeError(error) : "Failed to register batch. Please try again.",
       });
     } finally {
       setProcessingCallId(null);
@@ -221,26 +203,28 @@ export const HelperDesk = () => {
   const handleReject = async (call: VoiceGenieCall, reason: string) => {
     try {
       // Save rejection record
-      const { error } = await (supabase as any)
+      const rejectionData = {
+        call_id: sanitizeString(call.id, 100),
+        farmer_phone: sanitizeString(call.phone, 20),
+        farmer_name: call.farmerName ? sanitizeString(call.farmerName, 255) : null,
+        farmer_location: call.farmerLocation ? sanitizeString(call.farmerLocation, 500) : null,
+        submission_data: call.collectedData || {},
+        language: sanitizeString(call.language || 'hi', 10),
+        confidence_score: call.confidenceScore || 0.5,
+        call_recording_url: call.callRecordingUrl ? sanitizeString(call.callRecordingUrl, 500) : null,
+        status: 'rejected' as const,
+        helper_id: profile?.id || null,
+        helper_notes: 'Rejected via Helper Desk',
+        rejection_reason: sanitizeString(reason, 500),
+        reviewed_at: new Date().toISOString()
+      };
+
+      const { error } = await supabase
         .from('voicegenie_submissions')
-        .insert({
-          call_id: call.id,
-          farmer_phone: call.phone,
-          farmer_name: call.farmerName,
-          farmer_location: call.farmerLocation,
-          submission_data: call.collectedData || {},
-          language: call.language || 'hi',
-          confidence_score: call.confidenceScore || 0.5,
-          call_recording_url: call.callRecordingUrl,
-          status: 'rejected',
-          helper_id: profile?.id,
-          helper_notes: 'Rejected via Helper Desk',
-          rejection_reason: reason,
-          reviewed_at: new Date().toISOString()
-        });
+        .insert(rejectionData as Record<string, unknown>);
 
       if (error) {
-        console.error('Failed to save rejection:', error);
+        logger.error('Failed to save rejection', { error: error.message });
       }
 
       toast({
@@ -251,29 +235,27 @@ export const HelperDesk = () => {
       fetchCalls();
       setIsDetailsModalOpen(false);
     } catch (error) {
-      console.error('Error rejecting call:', error);
+      logger.error('Error rejecting call', error);
       toast({
         variant: "destructive",
         title: "Rejection Failed",
-        description: "Failed to save rejection. Please try again.",
+        description: error instanceof Error ? sanitizeError(error) : "Failed to save rejection. Please try again.",
       });
     }
   };
 
   // Wait for profile to load before checking authorization
-  // Check both role and user_type fields (some profiles might use user_type)
-  const userRole = profile ? ((profile as any)?.role || (profile as any)?.user_type) : null;
+  // Check user_type field (profiles table uses user_type, not role)
+  type ProfileRow = Tables<'profiles'>;
+  const userRole = (profile as ProfileRow | null)?.user_type || null;
   const isHelper = userRole === 'helper' || userRole === 'admin';
   
-  // Debug logging
-  console.log('🔍 HelperDesk Auth Check:', {
-    profile: profile,
-    role: (profile as any)?.role,
-    user_type: (profile as any)?.user_type,
-    userRole: userRole,
+  // Debug logging (removed sensitive data)
+  logger.debug('HelperDesk auth check', {
+    profileId: profile?.id,
+    userType: userRole,
     isHelper: isHelper,
-    user: user,
-    userEmail: user?.email
+    userId: user?.id,
   });
   
   // Show loading while profile is being fetched

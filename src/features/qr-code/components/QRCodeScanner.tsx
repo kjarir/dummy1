@@ -1,4 +1,5 @@
 import React, { useRef, useEffect, useState } from 'react';
+import { logger } from '@/lib/logger';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { useToast } from '@/components/ui/use-toast';
@@ -55,7 +56,7 @@ export const QRCodeScanner: React.FC<QRCodeScannerProps> = ({
         scanLoop();
       }
     } catch (err) {
-      console.error('Error accessing camera:', err);
+      logger.error('Error accessing camera:', err);
       setError('Camera access denied or not available');
       setHasPermission(false);
       toast({

@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { logger } from '@/lib/logger';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -69,7 +70,7 @@ export const BatchList: React.FC = () => {
       if (error) throw error;
       setBatches(data || []);
     } catch (error) {
-      console.error('Error fetching batches:', error);
+      logger.error('Error fetching batches:', error);
     } finally {
       setLoading(false);
     }

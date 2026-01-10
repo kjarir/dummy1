@@ -66,4 +66,12 @@ const CallSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
+// PERFORMANCE FIX: Add index on createdAt for sorting queries
+// The controller sorts by createdAt: -1, so we need an index
+CallSchema.index({ createdAt: -1 });
+
+// Additional indexes for common queries
+CallSchema.index({ phoneNumber: 1, createdAt: -1 });
+CallSchema.index({ status: 1, createdAt: -1 });
+
 export default mongoose.model("Call", CallSchema);

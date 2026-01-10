@@ -1,4 +1,5 @@
 import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
+import { logger } from '@/lib/logger';
 import { User, Session } from '@supabase/supabase-js';
 import { supabase } from '@/integrations/supabase/client';
 
@@ -90,7 +91,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           .limit(1);
 
         if (error) {
-          console.warn('Error fetching profile:', error.message);
+          logger.warn('Error fetching profile:', error.message);
           return null;
         }
 
@@ -131,13 +132,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           .single();
 
         if (createError) {
-          console.error('Failed to create profile:', createError);
+          logger.error('Failed to create profile:', createError);
           return null;
         }
 
         return createdProfile as Profile;
       } catch (error) {
-        console.error('Error fetching profile:', error);
+        logger.error('Error fetching profile:', error);
         return null;
       }
     })();
@@ -159,7 +160,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       await supabase.auth.signOut();
     } catch (error) {
       // Even if network request fails, clear local state
-      console.warn('⚠️ Sign out request failed, clearing local state anyway:', error);
+      logger.warn('⚠️ Sign out request failed, clearing local state anyway:', error);
     } finally {
       // Always clear local state regardless of network status
       setUser(null);

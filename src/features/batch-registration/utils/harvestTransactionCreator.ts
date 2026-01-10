@@ -1,4 +1,5 @@
 import { transactionManager } from '@/features/blockchain/utils/transactionManager';
+import { logger } from '@/lib/logger';
 import { supabase } from '@/integrations/supabase/client';
 
 /**
@@ -58,10 +59,10 @@ export class HarvestTransactionCreator {
       // Update the batch record with the transaction hash
       await this.updateBatchWithTransactionHash(batchId, harvestTransaction.ipfsHash);
 
-      console.log(`Created harvest transaction for batch ${batchId}: ${harvestTransaction.transactionId}`);
+      logger.debug(`Created harvest transaction for batch ${batchId}: ${harvestTransaction.transactionId}`);
       return harvestTransaction.transactionId;
     } catch (error) {
-      console.error('Error creating harvest transaction:', error);
+      logger.error('Error creating harvest transaction:', error);
       throw new Error('Failed to create harvest transaction');
     }
   }
@@ -83,7 +84,7 @@ export class HarvestTransactionCreator {
         throw error;
       }
     } catch (error) {
-      console.error('Error updating batch with transaction hash:', error);
+      logger.error('Error updating batch with transaction hash:', error);
       throw new Error('Failed to update batch with transaction hash');
     }
   }
@@ -97,7 +98,7 @@ export class HarvestTransactionCreator {
       const harvestTransaction = transactions.find(tx => tx.type === 'HARVEST');
       return harvestTransaction || null;
     } catch (error) {
-      console.error('Error getting harvest transaction:', error);
+      logger.error('Error getting harvest transaction:', error);
       return null;
     }
   }
@@ -110,7 +111,7 @@ export class HarvestTransactionCreator {
       const harvestTransaction = await this.getHarvestTransaction(batchId);
       return harvestTransaction !== null;
     } catch (error) {
-      console.error('Error verifying harvest transaction:', error);
+      logger.error('Error verifying harvest transaction:', error);
       return false;
     }
   }

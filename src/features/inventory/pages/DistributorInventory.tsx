@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { logger } from '@/lib/logger';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
 import { Button } from '@/components/ui/button';
@@ -33,7 +34,7 @@ export const DistributorInventory = () => {
       setLoading(true);
       
       // Get the distributor's profile ID
-      console.log('🔍 DEBUG: Looking up profile for user ID:', user?.id);
+      logger.debug('🔍 DEBUG: Looking up profile for user ID:', user?.id);
       const { data: profile, error: profileError } = await supabase
         .from('profiles')
         .select('id')
@@ -41,20 +42,20 @@ export const DistributorInventory = () => {
         .single();
 
       if (profileError) {
-        console.error('❌ Profile lookup error:', profileError);
+        logger.error('❌ Profile lookup error:', profileError);
         setInventory([]);
         return;
       }
 
       if (!profile) {
-        console.log('❌ No profile found for distributor');
+        logger.debug('❌ No profile found for distributor');
         setInventory([]);
         return;
       }
 
-      console.log('🔍 DEBUG: Found profile:', profile);
+      logger.debug('🔍 DEBUG: Found profile:', profile);
 
-      console.log('🔍 DEBUG: Fetching inventory for distributor profile ID:', profile.id);
+      logger.debug('🔍 DEBUG: Fetching inventory for distributor profile ID:', profile.id);
       
       const { data, error } = await supabase
         .from('distributor_inventory')
@@ -63,12 +64,12 @@ export const DistributorInventory = () => {
         .order('created_at', { ascending: false });
 
       if (error) {
-        console.error('Error fetching inventory:', error);
+        logger.error('Error fetching inventory:', error);
         setInventory([]);
         return;
       }
 
-      console.log('🔍 DEBUG: Raw distributor inventory data:', data);
+      logger.debug('🔍 DEBUG: Raw distributor inventory data:', data);
 
       // Get marketplace data for each inventory item
       const inventoryWithDetails = await Promise.all(
@@ -103,16 +104,16 @@ export const DistributorInventory = () => {
                 .eq('id', batchData.current_owner)
                 .single();
               currentOwnerProfile = ownerProfile;
-              console.log('🔍 DEBUG: Current owner profile fetched:', {
+              logger.debug('🔍 DEBUG: Current owner profile fetched:', {
                 current_owner_id: batchData.current_owner,
                 ownerProfile: currentOwnerProfile
               });
             } catch (ownerError) {
-              console.warn('Could not fetch current owner profile:', ownerError);
+              logger.warn('Could not fetch current owner profile:', ownerError);
             }
           }
 
-          console.log('🔍 DEBUG: Item data:', {
+          logger.debug('🔍 DEBUG: Item data:', {
             item,
             marketplaceData,
             batchData,
@@ -131,10 +132,10 @@ export const DistributorInventory = () => {
         })
       );
 
-      console.log('🔍 DEBUG: Inventory with details:', inventoryWithDetails);
+      logger.debug('🔍 DEBUG: Inventory with details:', inventoryWithDetails);
       setInventory(inventoryWithDetails);
     } catch (error) {
-      console.error('Error fetching inventory:', error);
+      logger.error('Error fetching inventory:', error);
       setInventory([]);
     } finally {
       setLoading(false);
@@ -154,9 +155,9 @@ export const DistributorInventory = () => {
             .single();
           
           currentOwnerProfile = ownerProfile;
-          console.log('🔍 DEBUG: Fetched current owner profile:', currentOwnerProfile);
+          logger.debug('🔍 DEBUG: Fetched current owner profile:', currentOwnerProfile);
         } catch (ownerError) {
-          console.warn('Could not fetch current owner profile:', ownerError);
+          logger.warn('Could not fetch current owner profile:', ownerError);
         }
       }
       
@@ -199,15 +200,15 @@ export const DistributorInventory = () => {
         }
       };
       
-      console.log('🔍 DEBUG: Batch data for modal (marketplace structure):', batchData);
-      console.log('🔍 DEBUG: Current owner ID:', item.batch?.current_owner);
-      console.log('🔍 DEBUG: Current owner profile:', currentOwnerProfile);
-      console.log('🔍 DEBUG: Original farmer:', item.batch?.farmer_id);
+      logger.debug('🔍 DEBUG: Batch data for modal (marketplace structure):', batchData);
+      logger.debug('🔍 DEBUG: Current owner ID:', item.batch?.current_owner);
+      logger.debug('🔍 DEBUG: Current owner profile:', currentOwnerProfile);
+      logger.debug('🔍 DEBUG: Original farmer:', item.batch?.farmer_id);
       
       setSelectedBatch(batchData);
       setIsDetailsModalOpen(true);
     } catch (error) {
-      console.error('Error preparing batch details:', error);
+      logger.error('Error preparing batch details:', error);
       // Fallback to marketplace structure
       const batchData = {
         ...item.marketplace,
@@ -235,10 +236,10 @@ export const DistributorInventory = () => {
         throw new Error('Profile not found');
       }
 
-      console.log('🔍 DEBUG: Adding to marketplace with profile ID:', profile.id);
-      console.log('🔍 DEBUG: Inventory item:', inventoryItem);
-      console.log('🔍 DEBUG: Marketplace ID:', inventoryItem.marketplace_id);
-      console.log('🔍 DEBUG: Quantity purchased:', inventoryItem.quantity_purchased);
+      logger.debug('🔍 DEBUG: Adding to marketplace with profile ID:', profile.id);
+      logger.debug('🔍 DEBUG: Inventory item:', inventoryItem);
+      logger.debug('🔍 DEBUG: Marketplace ID:', inventoryItem.marketplace_id);
+      logger.debug('🔍 DEBUG: Quantity purchased:', inventoryItem.quantity_purchased);
 
       // Update the marketplace item to show it's now sold by distributor
       // Also set status to 'available' and ensure quantity matches purchased quantity
@@ -254,7 +255,7 @@ export const DistributorInventory = () => {
         .eq('id', inventoryItem.marketplace_id);
 
       if (marketplaceError) {
-        console.error('❌ Marketplace update error:', marketplaceError);
+        logger.error('❌ Marketplace update error:', marketplaceError);
         throw new Error(`Failed to add to marketplace: ${marketplaceError.message}`);
       }
 
@@ -269,14 +270,14 @@ export const DistributorInventory = () => {
           .eq('id', inventoryItem.batch.id);
 
         if (batchError) {
-          console.warn('⚠️ Failed to update batch ownership:', batchError);
+          logger.warn('⚠️ Failed to update batch ownership:', batchError);
           // Don't throw error, marketplace update succeeded
         } else {
-          console.log('✅ Batch ownership updated to distributor');
+          logger.debug('✅ Batch ownership updated to distributor');
         }
       }
 
-      console.log('✅ Successfully added to marketplace');
+      logger.debug('✅ Successfully added to marketplace');
 
       toast({
         title: "Added to Marketplace!",
@@ -286,7 +287,7 @@ export const DistributorInventory = () => {
       // Refresh inventory
       fetchInventory();
     } catch (error) {
-      console.error('Error adding to marketplace:', error);
+      logger.error('Error adding to marketplace:', error);
       toast({
         variant: "destructive",
         title: "Failed to Add to Marketplace",

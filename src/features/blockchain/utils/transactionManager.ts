@@ -4,6 +4,8 @@ import { ipfsService } from '@/features/ipfs/utils/ipfs';
 import { SupplyChainTransaction, TransactionChain, OwnershipRecord } from '@/types/transaction';
 import { nameResolver } from '@/features/blockchain/utils/nameResolver';
 import { blockchainTransactionManager } from './blockchainTransactionManager';
+import { logger } from '@/lib/logger';
+import { sanitizeError, sanitizeString, isValidUUID } from '@/lib/security';
 
 type TransactionRow = Tables<'transactions'>;
 type BatchRow = Tables<'batches'>;
@@ -13,6 +15,38 @@ type GroupFileRow = Tables<'group_files'>;
 type BatchWithProfile = BatchRow & {
   profiles?: Pick<ProfileRow, 'full_name' | 'farm_location'> | null;
 };
+
+/**
+ * TransactionType Enum - Replace hardcoded strings
+ */
+export enum TransactionType {
+  HARVEST = 'HARVEST',
+  PURCHASE = 'PURCHASE',
+  TRANSFER = 'TRANSFER',
+  PROCESSING = 'PROCESSING',
+  RETAIL = 'RETAIL'
+}
+
+/**
+ * Format profile name with user type prefix
+ */
+function formatProfileName(profile: Pick<ProfileRow, 'full_name' | 'user_type'>): string {
+  if (!profile.full_name) {
+    return 'Unknown User';
+  }
+  
+  let name = profile.full_name.trim();
+  
+  if (profile.user_type) {
+    const userTypePrefix = profile.user_type.charAt(0).toUpperCase() + profile.user_type.slice(1);
+    // Check if name already starts with user type to avoid duplication
+    if (!name.toLowerCase().startsWith(profile.user_type.toLowerCase())) {
+      name = `${userTypePrefix} - ${name}`;
+    }
+  }
+  
+  return name;
+}
 
 /**
  * Immutable Transaction Manager
@@ -33,44 +67,8 @@ export class TransactionManager {
   }
 
   /**
-   * Clean up transaction data to fix existing issues
-   */
-  private cleanTransactionData(transaction: SupplyChainTransaction, farmerName?: string): SupplyChainTransaction {
-    let from = transaction.from;
-    let to = transaction.to;
-    
-    // Fix common issues with dynamic resolution
-    if (from === 'Farm') {
-      from = 'Farm Location';
-    }
-    if (from === 'Unknown Farmer' || from === 'Unknown Seller') {
-      from = 'Unknown User';
-    }
-    if (to === 'Unknown Farmer' || to === 'Unknown Buyer') {
-      to = 'Unknown User';
-    }
-    
-    // Special handling for harvest transactions - force farmer name in both fields
-    if (transaction.type === 'HARVEST') {
-      // If "from" is "Farm Location", replace with actual farmer name
-      if (from === 'Farm Location' && farmerName) {
-        from = farmerName;
-      }
-      // If "to" is "Farm Location", replace with actual farmer name
-      if (to === 'Farm Location' && farmerName) {
-        to = farmerName;
-      }
-    }
-    
-    return {
-      ...transaction,
-      from,
-      to
-    };
-  }
-
-  /**
    * Create a new immutable transaction record
+   * DATA INTEGRITY FIX: Validates from/to before saving, throws error if invalid
    */
   public async createTransaction(
     type: SupplyChainTransaction['type'],
@@ -84,15 +82,27 @@ export class TransactionManager {
     metadata?: SupplyChainTransaction['metadata']
   ): Promise<SupplyChainTransaction> {
     try {
+      // DATA INTEGRITY: Validate that from and to are not "Unknown" or empty
+      const sanitizedFrom = sanitizeString(from || '', 500).trim();
+      const sanitizedTo = sanitizeString(to || '', 500).trim();
+      
+      if (!sanitizedFrom || sanitizedFrom === '' || sanitizedFrom.toLowerCase() === 'unknown' || sanitizedFrom.toLowerCase() === 'unknown user' || sanitizedFrom.toLowerCase() === 'unknown farmer' || sanitizedFrom.toLowerCase() === 'unknown seller') {
+        throw new Error('Invalid "from" field. Cannot be empty, "Unknown", "Unknown User", "Unknown Farmer", or "Unknown Seller".');
+      }
+      
+      if (!sanitizedTo || sanitizedTo === '' || sanitizedTo.toLowerCase() === 'unknown' || sanitizedTo.toLowerCase() === 'unknown user' || sanitizedTo.toLowerCase() === 'unknown farmer' || sanitizedTo.toLowerCase() === 'unknown buyer') {
+        throw new Error('Invalid "to" field. Cannot be empty, "Unknown", "Unknown User", "Unknown Farmer", or "Unknown Buyer".');
+      }
+      
       // Generate unique transaction ID
       const transactionId = `txn_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
       
-      // Create transaction object
+      // Create transaction object with validated data
       const transaction: SupplyChainTransaction = {
         transactionId,
         type,
-        from,
-        to,
+        from: sanitizedFrom,
+        to: sanitizedTo,
         quantity,
         price,
         timestamp: new Date().toISOString(),
@@ -131,8 +141,8 @@ export class TransactionManager {
       // Created transaction persisted with IPFS hash
       return transaction;
     } catch (error) {
-      console.error('Error creating transaction:', error);
-      throw new Error('Failed to create transaction');
+      logger.error('Error creating transaction', error);
+      throw new Error(sanitizeError(error));
     }
   }
 
@@ -165,7 +175,7 @@ export class TransactionManager {
         throw error;
       }
     } catch (error) {
-      console.error('Error storing transaction in database:', error);
+      logger.error('Error storing transaction in database', error);
       throw new Error('Failed to store transaction in database');
     }
   }
@@ -182,12 +192,13 @@ export class TransactionManager {
         .single();
 
       if (error || !data) {
+        logger.debug('Transaction not found', { transactionId: sanitizeString(transactionId, 100) });
         return null;
       }
 
-      return this.mapDatabaseToTransaction(data as TransactionRow);
+      return this.mapDatabaseToTransaction(data);
     } catch (error) {
-      console.error('Error getting transaction:', error);
+      logger.error('Error getting transaction', error);
       return null;
     }
   }
@@ -204,18 +215,20 @@ export class TransactionManager {
         .single();
 
       if (error || !data) {
+        logger.debug('Transaction not found by IPFS hash', { ipfsHash: sanitizeString(ipfsHash, 100) });
         return null;
       }
 
-      return this.mapDatabaseToTransaction(data as TransactionRow);
+      return this.mapDatabaseToTransaction(data);
     } catch (error) {
-      console.error('Error getting transaction by IPFS hash:', error);
+      logger.error('Error getting transaction by IPFS hash', error);
       return null;
     }
   }
 
   /**
    * Get all transactions for a batch using group-based system
+   * PERFORMANCE FIX: Implemented batch fetching to eliminate N+1 queries
    */
   public async getBatchTransactions(batchId: string): Promise<SupplyChainTransaction[]> {
     try {
@@ -233,11 +246,17 @@ export class TransactionManager {
         .single();
 
       if (batchError || !batchData) {
-        console.warn('Batch not found:', batchId);
+        logger.warn('Batch not found', { batchId: sanitizeString(batchId, 100) });
         return [];
       }
 
-      const batch = batchData as BatchWithProfile;
+      const batch: BatchWithProfile = {
+        ...batchData,
+        profiles: batchData.profiles || null
+      };
+
+      // Get farmer name from batch data
+      const farmerName = batch.profiles?.full_name || null;
 
       // If batch has a group_id, get files from group_files table
       if (batch.group_id) {
@@ -246,66 +265,101 @@ export class TransactionManager {
           .from('group_files')
           .select('*')
           .eq('group_id', batch.group_id)
-          .in('transaction_type', ['HARVEST', 'PURCHASE', 'RETAIL', 'TRANSFER'])
+          .in('transaction_type', [TransactionType.HARVEST, TransactionType.PURCHASE, TransactionType.RETAIL, TransactionType.TRANSFER])
           .order('created_at', { ascending: true });
-        
 
         if (groupError) {
-          console.error('Error fetching group files:', groupError);
+          logger.error('Error fetching group files', groupError);
           return [];
         }
 
-        // Convert group files to transaction format
-        const transactions: SupplyChainTransaction[] = [];
-        
-        // Get farmer name from batch data - make it truly dynamic
-        let farmerName = null;
-        if (batch.profiles?.full_name) {
-          farmerName = batch.profiles.full_name;
-        } else if (batch.farmer_id) {
-          // Try to get farmer name from profiles table
-          try {
-            const { data: farmerProfile } = await supabase
-              .from('profiles')
-              .select('full_name')
-              .eq('id', batch.farmer_id)
-              .single();
-            
-            if (farmerProfile?.full_name) {
-              farmerName = farmerProfile.full_name;
-            }
-          } catch (error) {
-            console.warn('Could not fetch farmer profile:', error);
-          }
+        if (!groupFiles || groupFiles.length === 0) {
+          return [];
         }
+
+        // PERFORMANCE FIX: Batch Fetching Pattern - Collect all UUIDs first
+        const profileIds = new Set<string>();
         
-        // If still no farmer name found, try to get from user_id
-        if (!farmerName && batch.user_id) {
-          try {
-            const { data: userProfile } = await supabase
-              .from('profiles')
-              .select('full_name')
-              .eq('user_id', batch.user_id)
-              .single();
-            
-            if (userProfile?.full_name) {
-              farmerName = userProfile.full_name;
-            }
-          } catch (error) {
-            console.warn('Could not fetch user profile:', error);
-          }
-        }
-        
-        for (const file of groupFiles || []) {
-          // Parse metadata if it's a string
-          let parsedMetadata = file.metadata;
+        // First pass: Collect all unique profile IDs (UUIDs) from metadata
+        for (const file of groupFiles) {
+          let parsedMetadata: Record<string, unknown> | null = null;
+          
           if (typeof file.metadata === 'string') {
             try {
-              parsedMetadata = JSON.parse(file.metadata);
+              parsedMetadata = JSON.parse(file.metadata) as Record<string, unknown>;
             } catch (e) {
-              console.warn('Failed to parse metadata:', file.metadata);
+              logger.warn('Failed to parse metadata', { error: e, metadata: typeof file.metadata === 'string' ? file.metadata.substring(0, 100) : 'non-string' });
               parsedMetadata = {};
             }
+          } else if (file.metadata && typeof file.metadata === 'object') {
+            parsedMetadata = file.metadata as Record<string, unknown>;
+          }
+          
+          const fromIdentifier = parsedMetadata?.from || parsedMetadata?.keyvalues?.from;
+          const toIdentifier = parsedMetadata?.to || parsedMetadata?.keyvalues?.to;
+          
+          // Collect UUIDs (profile IDs) for batch fetching
+          if (fromIdentifier && typeof fromIdentifier === 'string' && isValidUUID(fromIdentifier)) {
+            profileIds.add(fromIdentifier);
+          }
+          if (toIdentifier && typeof toIdentifier === 'string' && isValidUUID(toIdentifier)) {
+            profileIds.add(toIdentifier);
+          }
+        }
+
+        // PERFORMANCE FIX: Single batch query to fetch all profiles at once
+        const profileMap = new Map<string, Pick<ProfileRow, 'full_name' | 'user_type'>>();
+        
+        if (profileIds.size > 0) {
+          try {
+            const profileIdArray = Array.from(profileIds);
+            const { data: profiles, error: profilesError } = await supabase
+              .from('profiles')
+              .select('id, full_name, user_type')
+              .in('id', profileIdArray);
+            
+            if (!profilesError && profiles) {
+              for (const profile of profiles) {
+                if (profile.id && profile.full_name) {
+                  profileMap.set(profile.id, {
+                    full_name: profile.full_name,
+                    user_type: profile.user_type || null
+                  });
+                }
+              }
+            } else {
+              logger.warn('Error fetching profiles in batch', profilesError);
+            }
+          } catch (batchFetchError) {
+            logger.error('Error in batch profile fetch', batchFetchError);
+          }
+        }
+
+        // Also add farmer profile to map if available
+        if (batch.farmer_id && isValidUUID(batch.farmer_id)) {
+          if (!profileMap.has(batch.farmer_id) && batch.profiles?.full_name) {
+            profileMap.set(batch.farmer_id, {
+              full_name: batch.profiles.full_name,
+              user_type: null
+            });
+          }
+        }
+
+        // Second pass: Build transactions using the profile map for instant lookup
+        const transactions: SupplyChainTransaction[] = [];
+        
+        for (const file of groupFiles) {
+          // Parse metadata if it's a string
+          let parsedMetadata: Record<string, unknown> | null = null;
+          if (typeof file.metadata === 'string') {
+            try {
+              parsedMetadata = JSON.parse(file.metadata) as Record<string, unknown>;
+            } catch (e) {
+              logger.warn('Failed to parse metadata', { error: e, metadata: typeof file.metadata === 'string' ? file.metadata.substring(0, 100) : 'non-string' });
+              parsedMetadata = {};
+            }
+          } else if (file.metadata && typeof file.metadata === 'object') {
+            parsedMetadata = file.metadata as Record<string, unknown>;
           }
           
           // Get identifiers from metadata
@@ -314,88 +368,73 @@ export class TransactionManager {
           const storedFarmerName = parsedMetadata?.farmerName || parsedMetadata?.keyvalues?.farmerName;
           const storedBuyerName = parsedMetadata?.buyerName || parsedMetadata?.keyvalues?.buyerName;
           
-          // Resolve names dynamically from stored data and database
-          let fromName = null;
-          let toName = null;
+          // Resolve names using the profile map (instant lookup, no database calls)
+          let fromName: string | null = null;
+          let toName: string | null = null;
           
-          if (file.transaction_type === 'HARVEST') {
+          if (file.transaction_type === TransactionType.HARVEST) {
             // For harvest transactions: Farmer harvests and owns the crop
-            fromName = storedFarmerName || farmerName || await nameResolver.resolveName(fromIdentifier || 'Unknown Farmer');
-            toName = storedFarmerName || farmerName || await nameResolver.resolveName(toIdentifier || 'Unknown Farmer');
-          } else if (file.transaction_type === 'PURCHASE' || file.transaction_type === 'RETAIL') {
-            // For purchase/retail transactions: Get actual seller and buyer names
-            // IMPORTANT: fromIdentifier/toIdentifier might be profile IDs (UUIDs), resolve them
-            const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-            
-            // Resolve seller (from) - could be farmer or distributor
-            if (uuidRegex.test(fromIdentifier)) {
-              try {
-                const { data: fromProfile } = await supabase
-                  .from('profiles')
-                  .select('full_name, user_type')
-                  .eq('id', fromIdentifier)
-                  .single();
-                
-                if (fromProfile?.full_name) {
-                  // Format: "UserType - Name" but avoid duplicates
-                  let name = fromProfile.full_name;
-                  if (fromProfile.user_type) {
-                    const userTypePrefix = fromProfile.user_type.charAt(0).toUpperCase() + fromProfile.user_type.slice(1);
-                    // Check if name already starts with user type to avoid duplication
-                    if (!name.toLowerCase().startsWith(fromProfile.user_type.toLowerCase())) {
-                      name = `${userTypePrefix} - ${name}`;
-                    }
-                  }
-                  fromName = name.trim();
-                }
-              } catch (e) {
-                console.warn('Could not resolve fromIdentifier (seller):', fromIdentifier);
-                fromName = storedFarmerName || farmerName || await nameResolver.resolveName(fromIdentifier || 'Unknown Seller');
-              }
+            if (storedFarmerName && typeof storedFarmerName === 'string') {
+              fromName = storedFarmerName;
+              toName = storedFarmerName;
+            } else if (farmerName) {
+              fromName = farmerName;
+              toName = farmerName;
+            } else if (fromIdentifier && isValidUUID(fromIdentifier) && profileMap.has(fromIdentifier)) {
+              const profile = profileMap.get(fromIdentifier)!;
+              fromName = formatProfileName(profile);
+              toName = fromName;
             } else {
-              fromName = storedFarmerName || farmerName || await nameResolver.resolveName(fromIdentifier || 'Unknown Seller');
+              // Fallback to name resolver for non-UUID identifiers
+              fromName = await nameResolver.resolveName(fromIdentifier || 'Unknown Farmer');
+              toName = fromName;
+            }
+          } else if (file.transaction_type === TransactionType.PURCHASE || file.transaction_type === TransactionType.RETAIL) {
+            // For purchase/retail transactions: Get actual seller and buyer names from map
+            // Resolve seller (from)
+            if (fromIdentifier && isValidUUID(fromIdentifier) && profileMap.has(fromIdentifier)) {
+              const profile = profileMap.get(fromIdentifier)!;
+              fromName = formatProfileName(profile);
+            } else if (storedFarmerName && typeof storedFarmerName === 'string') {
+              fromName = storedFarmerName;
+            } else if (farmerName) {
+              fromName = farmerName;
+            } else {
+              fromName = await nameResolver.resolveName(fromIdentifier || 'Unknown Seller');
             }
             
-            // Resolve buyer (to) - could be distributor or retailer
-            if (uuidRegex.test(toIdentifier)) {
-              try {
-                const { data: toProfile } = await supabase
-                  .from('profiles')
-                  .select('full_name, user_type')
-                  .eq('id', toIdentifier)
-                  .single();
-                
-                if (toProfile?.full_name) {
-                  // Format: "UserType - Name" but avoid duplicates
-                  let name = toProfile.full_name;
-                  if (toProfile.user_type) {
-                    const userTypePrefix = toProfile.user_type.charAt(0).toUpperCase() + toProfile.user_type.slice(1);
-                    // Check if name already starts with user type to avoid duplication
-                    if (!name.toLowerCase().startsWith(toProfile.user_type.toLowerCase())) {
-                      name = `${userTypePrefix} - ${name}`;
-                    }
-                  }
-                  toName = name.trim();
-                }
-              } catch (e) {
-                console.warn('Could not resolve toIdentifier (buyer):', toIdentifier);
-                toName = storedBuyerName || await nameResolver.resolveName(toIdentifier || 'Unknown Buyer');
-              }
+            // Resolve buyer (to)
+            if (toIdentifier && isValidUUID(toIdentifier) && profileMap.has(toIdentifier)) {
+              const profile = profileMap.get(toIdentifier)!;
+              toName = formatProfileName(profile);
+            } else if (storedBuyerName && typeof storedBuyerName === 'string') {
+              toName = storedBuyerName;
             } else {
-              toName = storedBuyerName || await nameResolver.resolveName(toIdentifier || 'Unknown Buyer');
+              toName = await nameResolver.resolveName(toIdentifier || 'Unknown Buyer');
             }
           } else {
             // For other transactions, use name resolver for both
-            fromName = await nameResolver.resolveName(fromIdentifier || 'Unknown');
-            toName = await nameResolver.resolveName(toIdentifier || 'Unknown');
+            if (fromIdentifier && isValidUUID(fromIdentifier) && profileMap.has(fromIdentifier)) {
+              const profile = profileMap.get(fromIdentifier)!;
+              fromName = formatProfileName(profile);
+            } else {
+              fromName = await nameResolver.resolveName(fromIdentifier || 'Unknown');
+            }
+            
+            if (toIdentifier && isValidUUID(toIdentifier) && profileMap.has(toIdentifier)) {
+              const profile = profileMap.get(toIdentifier)!;
+              toName = formatProfileName(profile);
+            } else {
+              toName = await nameResolver.resolveName(toIdentifier || 'Unknown');
+            }
           }
           
-          // Ensure we have valid names - fallback to dynamic resolution if needed
-          if (!fromName || fromName === 'Unknown' || fromName === 'Unknown Farmer') {
-            fromName = farmerName || 'Unknown User';
+          // Final validation: Ensure we have valid names (no "Unknown" allowed)
+          if (!fromName || fromName === 'Unknown' || fromName === 'Unknown Farmer' || fromName === 'Unknown Seller') {
+            fromName = farmerName || 'Invalid From Address';
           }
-          if (!toName || toName === 'Unknown' || toName === 'Unknown Farmer') {
-            toName = farmerName || 'Unknown User';
+          if (!toName || toName === 'Unknown' || toName === 'Unknown Farmer' || toName === 'Unknown Buyer') {
+            toName = farmerName || 'Invalid To Address';
           }
           
           const transaction: SupplyChainTransaction = {
@@ -403,25 +442,31 @@ export class TransactionManager {
             type: file.transaction_type as SupplyChainTransaction['type'],
             from: fromName,
             to: toName,
-            quantity: parseInt(parsedMetadata?.quantity || parsedMetadata?.keyvalues?.quantity || '0'),
-            price: parseFloat(parsedMetadata?.price || parsedMetadata?.keyvalues?.price || '0'),
+            quantity: typeof parsedMetadata?.quantity === 'number' 
+              ? parsedMetadata.quantity 
+              : typeof parsedMetadata?.keyvalues?.quantity === 'number'
+                ? parsedMetadata.keyvalues.quantity
+                : parseInt(String(parsedMetadata?.quantity || parsedMetadata?.keyvalues?.quantity || '0'), 10),
+            price: typeof parsedMetadata?.price === 'number'
+              ? parsedMetadata.price
+              : typeof parsedMetadata?.keyvalues?.price === 'number'
+                ? parsedMetadata.keyvalues.price
+                : parseFloat(String(parsedMetadata?.price || parsedMetadata?.keyvalues?.price || '0')),
             timestamp: file.created_at,
             previousTransactionHash: undefined,
             batchId: file.batch_id || batchId,
             productDetails: {
-              crop: batch.crop_type,
-              variety: batch.variety,
-              grading: batch.grading,
+              crop: batch.crop_type || '',
+              variety: batch.variety || '',
+              grading: batch.grading || '',
               harvestDate: batch.harvest_date || ''
             },
             metadata: parsedMetadata,
-            ipfsHash: file.ipfs_hash,
+            ipfsHash: file.ipfs_hash || '',
             blockchainHash: undefined
           };
           
-          // Clean up the transaction data before adding
-          const cleanedTransaction = this.cleanTransactionData(transaction, farmerName);
-          transactions.push(cleanedTransaction);
+          transactions.push(transaction);
         }
 
         // Also check transactions table for any additional transactions
@@ -433,72 +478,62 @@ export class TransactionManager {
             .order('transaction_timestamp', { ascending: true });
           
           if (!dbError && dbTransactions && dbTransactions.length > 0) {
-            // Merge transactions from both sources
-            const dbTransactionsMapped = await Promise.all(
-              dbTransactions.map(async (record: TransactionRow) => {
-                // Resolve profile IDs to names
-                let fromName = record.from_address;
-                let toName = record.to_address;
-                
-                const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-                
-                if (uuidRegex.test(record.from_address)) {
-                  try {
-                    const { data: fromProfile } = await supabase
-                      .from('profiles')
-                      .select('full_name, user_type')
-                      .eq('id', record.from_address)
-                      .single();
-                    
-                    if (fromProfile?.full_name) {
-                      // Format: "UserType - Name" but avoid duplicates
-                      let name = fromProfile.full_name;
-                      if (fromProfile.user_type) {
-                        const userTypePrefix = fromProfile.user_type.charAt(0).toUpperCase() + fromProfile.user_type.slice(1);
-                        // Check if name already starts with user type to avoid duplication
-                        if (!name.toLowerCase().startsWith(fromProfile.user_type.toLowerCase())) {
-                          name = `${userTypePrefix} - ${name}`;
-                        }
-                      }
-                      fromName = name.trim();
-                    }
-                  } catch (e) {
-                    console.warn('Could not resolve from_address:', record.from_address);
+            // PERFORMANCE FIX: Batch fetch profiles for transactions table records
+            const transactionProfileIds = new Set<string>();
+            
+            for (const record of dbTransactions) {
+              if (record.from_address && isValidUUID(record.from_address)) {
+                transactionProfileIds.add(record.from_address);
+              }
+              if (record.to_address && isValidUUID(record.to_address)) {
+                transactionProfileIds.add(record.to_address);
+              }
+            }
+            
+            // Batch fetch profiles for transaction table records
+            const transactionProfileMap = new Map<string, Pick<ProfileRow, 'full_name' | 'user_type'>>();
+            
+            if (transactionProfileIds.size > 0) {
+              const transactionProfileIdArray = Array.from(transactionProfileIds);
+              const { data: transactionProfiles, error: transactionProfilesError } = await supabase
+                .from('profiles')
+                .select('id, full_name, user_type')
+                .in('id', transactionProfileIdArray);
+              
+              if (!transactionProfilesError && transactionProfiles) {
+                for (const profile of transactionProfiles) {
+                  if (profile.id && profile.full_name) {
+                    transactionProfileMap.set(profile.id, {
+                      full_name: profile.full_name,
+                      user_type: profile.user_type || null
+                    });
                   }
                 }
-                
-                if (uuidRegex.test(record.to_address)) {
-                  try {
-                    const { data: toProfile } = await supabase
-                      .from('profiles')
-                      .select('full_name, user_type')
-                      .eq('id', record.to_address)
-                      .single();
-                    
-                    if (toProfile?.full_name) {
-                      // Format: "UserType - Name" but avoid duplicates
-                      let name = toProfile.full_name;
-                      if (toProfile.user_type) {
-                        const userTypePrefix = toProfile.user_type.charAt(0).toUpperCase() + toProfile.user_type.slice(1);
-                        // Check if name already starts with user type to avoid duplication
-                        if (!name.toLowerCase().startsWith(toProfile.user_type.toLowerCase())) {
-                          name = `${userTypePrefix} - ${name}`;
-                        }
-                      }
-                      toName = name.trim();
-                    }
-                  } catch (e) {
-                    console.warn('Could not resolve to_address:', record.to_address);
-                  }
-                }
-                
-                return this.mapDatabaseToTransaction({
-                  ...record,
-                  from_address: fromName,
-                  to_address: toName
-                });
-              })
-            );
+              }
+            }
+            
+            // Map transactions using the profile map
+            const dbTransactionsMapped = dbTransactions.map((record: TransactionRow) => {
+              let fromName = record.from_address || '';
+              let toName = record.to_address || '';
+              
+              // Resolve using profile map (instant lookup)
+              if (record.from_address && isValidUUID(record.from_address) && transactionProfileMap.has(record.from_address)) {
+                const profile = transactionProfileMap.get(record.from_address)!;
+                fromName = formatProfileName(profile);
+              }
+              
+              if (record.to_address && isValidUUID(record.to_address) && transactionProfileMap.has(record.to_address)) {
+                const profile = transactionProfileMap.get(record.to_address)!;
+                toName = formatProfileName(profile);
+              }
+              
+              return this.mapDatabaseToTransaction({
+                ...record,
+                from_address: fromName,
+                to_address: toName
+              });
+            });
             
             // Merge and deduplicate by transaction ID
             const allTransactions = [...transactions];
@@ -514,7 +549,7 @@ export class TransactionManager {
             return allTransactions;
           }
         } catch (dbError) {
-          console.warn('Could not fetch from transactions table:', dbError);
+          logger.warn('Could not fetch from transactions table', { error: dbError, batchId: sanitizeString(batchId, 100) });
         }
         
         return transactions;
@@ -525,91 +560,81 @@ export class TransactionManager {
         const { data, error } = await supabase
           .from('transactions')
           .select('*')
-          .eq('batch_id', batchId)
+          .eq('batch_id', sanitizeString(batchId, 100))
           .order('transaction_timestamp', { ascending: true });
 
         if (error) {
-          console.warn('Transactions table not available, returning empty array for batch:', batchId);
+          logger.warn('Transactions table not available', { batchId: sanitizeString(batchId, 100) });
           return [];
         }
 
-        // Resolve profile IDs to names for transactions table records
-        const transactionsWithNames = await Promise.all(
-          (data || []).map(async (record: TransactionRow) => {
-            // Resolve from_address and to_address (profile IDs) to names
-            let fromName = record.from_address;
-            let toName = record.to_address;
-            
-            // Check if they're UUIDs (profile IDs) or already names
-            const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-            
-            if (uuidRegex.test(record.from_address)) {
-              // It's a UUID, resolve to name
-              try {
-                const { data: fromProfile } = await supabase
-                  .from('profiles')
-                  .select('full_name, user_type')
-                  .eq('id', record.from_address)
-                  .single();
-                
-                if (fromProfile?.full_name) {
-                  // Format: "UserType - Name" but avoid duplicates
-                  let name = fromProfile.full_name;
-                  if (fromProfile.user_type) {
-                    const userTypePrefix = fromProfile.user_type.charAt(0).toUpperCase() + fromProfile.user_type.slice(1);
-                    // Check if name already starts with user type to avoid duplication
-                    if (!name.toLowerCase().startsWith(fromProfile.user_type.toLowerCase())) {
-                      name = `${userTypePrefix} - ${name}`;
-                    }
-                  }
-                  fromName = name.trim();
-                }
-              } catch (e) {
-                console.warn('Could not resolve from_address:', record.from_address);
+        if (!data || data.length === 0) {
+          return [];
+        }
+
+        // PERFORMANCE FIX: Batch fetch profiles for fallback transactions
+        const fallbackProfileIds = new Set<string>();
+        
+        for (const record of data) {
+          if (record.from_address && isValidUUID(record.from_address)) {
+            fallbackProfileIds.add(record.from_address);
+          }
+          if (record.to_address && isValidUUID(record.to_address)) {
+            fallbackProfileIds.add(record.to_address);
+          }
+        }
+        
+        const fallbackProfileMap = new Map<string, Pick<ProfileRow, 'full_name' | 'user_type'>>();
+        
+        if (fallbackProfileIds.size > 0) {
+          const fallbackProfileIdArray = Array.from(fallbackProfileIds);
+          const { data: fallbackProfiles, error: fallbackProfilesError } = await supabase
+            .from('profiles')
+            .select('id, full_name, user_type')
+            .in('id', fallbackProfileIdArray);
+          
+          if (!fallbackProfilesError && fallbackProfiles) {
+            for (const profile of fallbackProfiles) {
+              if (profile.id && profile.full_name) {
+                fallbackProfileMap.set(profile.id, {
+                  full_name: profile.full_name,
+                  user_type: profile.user_type || null
+                });
               }
             }
-            
-            if (uuidRegex.test(record.to_address)) {
-              // It's a UUID, resolve to name
-              try {
-                const { data: toProfile } = await supabase
-                  .from('profiles')
-                  .select('full_name, user_type')
-                  .eq('id', record.to_address)
-                  .single();
-                
-                if (toProfile?.full_name) {
-                  // Format: "UserType - Name" but avoid duplicates
-                  let name = toProfile.full_name;
-                  if (toProfile.user_type) {
-                    const userTypePrefix = toProfile.user_type.charAt(0).toUpperCase() + toProfile.user_type.slice(1);
-                    // Check if name already starts with user type to avoid duplication
-                    if (!name.toLowerCase().startsWith(toProfile.user_type.toLowerCase())) {
-                      name = `${userTypePrefix} - ${name}`;
-                    }
-                  }
-                  toName = name.trim();
-                }
-              } catch (e) {
-                console.warn('Could not resolve to_address:', record.to_address);
-              }
-            }
-            
-            return this.mapDatabaseToTransaction({
-              ...record,
-              from_address: fromName,
-              to_address: toName
-            });
-          })
-        );
+          }
+        }
+        
+        // Map transactions using the profile map
+        const transactionsWithNames = data.map((record) => {
+          let fromName = record.from_address || '';
+          let toName = record.to_address || '';
+          
+          // Resolve using profile map (instant lookup)
+          if (record.from_address && isValidUUID(record.from_address) && fallbackProfileMap.has(record.from_address)) {
+            const profile = fallbackProfileMap.get(record.from_address)!;
+            fromName = formatProfileName(profile);
+          }
+          
+          if (record.to_address && isValidUUID(record.to_address) && fallbackProfileMap.has(record.to_address)) {
+            const profile = fallbackProfileMap.get(record.to_address)!;
+            toName = formatProfileName(profile);
+          }
+          
+          return this.mapDatabaseToTransaction({
+            ...record,
+            from_address: fromName,
+            to_address: toName
+          });
+        });
         
         return transactionsWithNames;
       } catch (error) {
-        console.warn('Transactions table not available in group-based system, returning empty array for batch:', batchId);
+        logger.warn('Transactions table not available in group-based system', { batchId: sanitizeString(batchId, 100) });
         return [];
       }
     } catch (error) {
-      console.error('Error getting batch transactions:', error);
+      logger.error('Error getting batch transactions', error);
       return [];
     }
   }
@@ -632,42 +657,14 @@ export class TransactionManager {
         };
       }
 
-      // Get farmer name for cleanup
-      let farmerName = null;
-      try {
-        const { data: batch } = await supabase
-          .from('batches')
-          .select('profiles(full_name), farmer_id, user_id')
-          .eq('id', batchId)
-          .single();
-        
-        if (batch?.profiles?.full_name) {
-          farmerName = batch.profiles.full_name;
-        } else if (batch?.farmer_id) {
-          const { data: farmerProfile } = await supabase
-            .from('profiles')
-            .select('full_name')
-            .eq('id', batch.farmer_id)
-            .single();
-          if (farmerProfile?.full_name) {
-            farmerName = farmerProfile.full_name;
-          }
-        }
-      } catch (error) {
-        console.warn('Could not fetch farmer name for transaction cleanup:', error);
-      }
-
-      // Final cleanup of all transactions
-      const cleanedTransactions = transactions.map(transaction => this.cleanTransactionData(transaction, farmerName));
-
       // Calculate current ownership
       const currentOwners: { [owner: string]: { quantity: number; lastTransaction: string } } = {};
       let totalQuantity = 0;
       let availableQuantity = 0;
 
       // Process transactions in order
-      for (const transaction of cleanedTransactions) {
-        if (transaction.type === 'HARVEST') {
+      for (const transaction of transactions) {
+        if (transaction.type === TransactionType.HARVEST) {
           // Initial harvest - farmer owns everything (farmer is the "to" field)
           currentOwners[transaction.to] = {
             quantity: transaction.quantity,
@@ -675,7 +672,7 @@ export class TransactionManager {
           };
           totalQuantity = transaction.quantity;
           availableQuantity = transaction.quantity;
-        } else if (transaction.type === 'PURCHASE' || transaction.type === 'RETAIL' || transaction.type === 'TRANSFER') {
+        } else if (transaction.type === TransactionType.PURCHASE || transaction.type === TransactionType.RETAIL || transaction.type === TransactionType.TRANSFER) {
           // Transfer ownership - RETAIL is when retailer buys from distributor
           if (currentOwners[transaction.from]) {
             currentOwners[transaction.from].quantity -= transaction.quantity;
@@ -699,14 +696,14 @@ export class TransactionManager {
 
       return {
         batchId,
-        transactions: cleanedTransactions,
+        transactions,
         currentOwners,
         totalQuantity,
         availableQuantity: Math.max(0, availableQuantity)
       };
     } catch (error) {
-      console.error('Error building transaction chain:', error);
-      throw new Error('Failed to build transaction chain');
+      logger.error('Error building transaction chain', error);
+      throw new Error(sanitizeError(error));
     }
   }
 
@@ -715,10 +712,15 @@ export class TransactionManager {
    */
   async getBlockchainTransactionHistory(batchId: string): Promise<SupplyChainTransaction[]> {
     try {
-      const blockchainTransactions = await blockchainTransactionManager.getBatchTransactionHistory(batchId);
+      const sanitizedBatchId = sanitizeString(batchId, 100);
+      if (!sanitizedBatchId) {
+        logger.warn('Invalid batch ID for blockchain transaction history', { batchId });
+        return [];
+      }
+      const blockchainTransactions = await blockchainTransactionManager.getBatchTransactionHistory(sanitizedBatchId);
       return blockchainTransactions;
     } catch (error) {
-      console.error('Error fetching blockchain transaction history:', error);
+      logger.error('Error fetching blockchain transaction history', error);
       return [];
     }
   }
@@ -728,16 +730,21 @@ export class TransactionManager {
    */
   async getCompleteTransactionHistory(batchId: string): Promise<SupplyChainTransaction[]> {
     try {
+      const sanitizedBatchId = sanitizeString(batchId, 100);
+      if (!sanitizedBatchId) {
+        logger.warn('Invalid batch ID for complete transaction history', { batchId });
+        return [];
+      }
       // Get database transactions
-      const dbTransactions = await this.getBatchTransactions(batchId);
+      const dbTransactions = await this.getBatchTransactions(sanitizedBatchId);
       // Get blockchain transactions
-      const blockchainTransactions = await this.getBlockchainTransactionHistory(batchId);
+      const blockchainTransactions = await this.getBlockchainTransactionHistory(sanitizedBatchId);
       // Merge and sort by timestamp
       const allTransactions = [...dbTransactions, ...blockchainTransactions];
       allTransactions.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
       return allTransactions;
     } catch (error) {
-      console.error('Error fetching complete transaction history:', error);
+      logger.error('Error fetching complete transaction history', error);
       return [];
     }
   }
@@ -751,7 +758,7 @@ export class TransactionManager {
       const ownershipHistory: OwnershipRecord[] = [];
 
       for (const transaction of chain.transactions) {
-        if (transaction.type === 'HARVEST' || transaction.type === 'PURCHASE' || transaction.type === 'TRANSFER') {
+        if (transaction.type === TransactionType.HARVEST || transaction.type === TransactionType.PURCHASE || transaction.type === TransactionType.TRANSFER) {
           // For all transactions, the "to" field becomes the owner
           ownershipHistory.push({
             owner: transaction.to,
@@ -765,7 +772,7 @@ export class TransactionManager {
 
       return ownershipHistory;
     } catch (error) {
-      console.error('Error getting ownership history:', error);
+      logger.error('Error getting ownership history', error);
       return [];
     }
   }
@@ -776,26 +783,29 @@ export class TransactionManager {
   private mapDatabaseToTransaction(data: TransactionRow): SupplyChainTransaction {
     const transaction: SupplyChainTransaction = {
       transactionId: data.transaction_id,
-      type: data.type,
-      from: data.from_address ?? 'Unknown User',
-      to: data.to_address ?? 'Unknown User',
+      type: (data.type || 'UNKNOWN') as SupplyChainTransaction['type'],
+      from: data.from_address ?? 'Invalid From Address',
+      to: data.to_address ?? 'Invalid To Address',
       quantity: data.quantity ?? 0,
       price: data.price ?? 0,
       timestamp: data.transaction_timestamp || new Date().toISOString(),
-      previousTransactionHash: data.previous_transaction_hash,
+      previousTransactionHash: data.previous_transaction_hash ?? undefined,
       batchId: data.batch_id ?? '',
-      productDetails: (data.product_details as SupplyChainTransaction['productDetails']) ?? {
-        crop: '',
-        variety: '',
-        harvestDate: '',
-      },
-      metadata: data.metadata ?? undefined,
+      productDetails: (data.product_details && typeof data.product_details === 'object' 
+        ? data.product_details as SupplyChainTransaction['productDetails']
+        : {
+            crop: '',
+            variety: '',
+            harvestDate: '',
+          }),
+      metadata: (data.metadata && typeof data.metadata === 'object' 
+        ? data.metadata as SupplyChainTransaction['metadata']
+        : undefined),
       ipfsHash: data.ipfs_hash ?? '',
       blockchainHash: data.blockchain_hash ?? undefined
     };
     
-    // Clean up the transaction data
-    return this.cleanTransactionData(transaction);
+    return transaction;
   }
 
   /**
@@ -812,7 +822,7 @@ export class TransactionManager {
         return { isValid: false, errors };
       }
 
-      if (chain.transactions[0].type !== 'HARVEST') {
+      if (chain.transactions[0].type !== TransactionType.HARVEST) {
         errors.push('First transaction must be HARVEST');
       }
 
@@ -829,9 +839,9 @@ export class TransactionManager {
       // Check quantity consistency
       let runningTotal = 0;
       for (const transaction of chain.transactions) {
-        if (transaction.type === 'HARVEST') {
+        if (transaction.type === TransactionType.HARVEST) {
           runningTotal = transaction.quantity;
-        } else if (transaction.type === 'PURCHASE' || transaction.type === 'TRANSFER') {
+        } else if (transaction.type === TransactionType.PURCHASE || transaction.type === TransactionType.TRANSFER) {
           runningTotal -= transaction.quantity;
           if (runningTotal < 0) {
             errors.push(`Transaction ${transaction.transactionId} exceeds available quantity`);
@@ -844,7 +854,7 @@ export class TransactionManager {
         errors
       };
     } catch (error) {
-      console.error('Error verifying transaction chain:', error);
+      logger.error('Error verifying transaction chain', error);
       return {
         isValid: false,
         errors: ['Failed to verify transaction chain']

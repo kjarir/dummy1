@@ -1,4 +1,5 @@
 /**
+import { logger } from '@/lib/logger';
  * Mandi Price API integration for current agricultural commodity prices
  * API: https://agriinfoextractor.onrender.com/api/mandi/price
  */
@@ -73,7 +74,7 @@ export async function fetchMarketPrices(options: {
   try {
     // Require state, district, and commodity for the new API
     if (!options.state || !options.district || !options.commodity) {
-      console.warn('⚠️ Missing required parameters: state, district, or commodity');
+      logger.warn('⚠️ Missing required parameters: state, district, or commodity');
       return {
         records: [],
         total: 0,
@@ -91,7 +92,7 @@ export async function fetchMarketPrices(options: {
     });
 
     const url = `${BASE_URL}?${params.toString()}`;
-    console.log('🔍 Fetching mandi prices from:', url);
+    logger.debug('🔍 Fetching mandi prices from:', url);
 
     const response = await fetch(url, {
       method: 'GET',
@@ -106,7 +107,7 @@ export async function fetchMarketPrices(options: {
     }
 
     const data: MandiPriceAPIResponse = await response.json();
-    console.log('📊 Mandi price API response:', data);
+    logger.debug('📊 Mandi price API response:', data);
 
     // Convert API response to MarketPriceData format
     const marketPriceData: MarketPriceData = {
@@ -128,7 +129,7 @@ export async function fetchMarketPrices(options: {
       offset: options.offset || 0,
     };
   } catch (error) {
-    console.error('❌ Error fetching market prices:', error);
+    logger.error('❌ Error fetching market prices:', error);
     throw new Error(`Failed to fetch market prices: ${error instanceof Error ? error.message : 'Unknown error'}`);
   }
 }
@@ -272,7 +273,7 @@ export async function getPriceSuggestions(
 
     // If API returns no data, use fallback data
     if (response.records.length === 0) {
-      console.log('🔄 Using fallback market data for:', cropType);
+      logger.debug('🔄 Using fallback market data for:', cropType);
       const fallbackData = FALLBACK_MARKET_DATA[cropType] || [];
       
       if (fallbackData.length === 0) {
@@ -333,7 +334,7 @@ export async function getPriceSuggestions(
     // Use modal_price as averagePrice (since API doesn't provide average, modal is the most common price)
     const averagePrice = modalPrice;
 
-    console.log('📊 Using API prices directly:', { minPrice, maxPrice, modalPrice, averagePrice });
+    logger.debug('📊 Using API prices directly:', { minPrice, maxPrice, modalPrice, averagePrice });
 
     return {
       minPrice: Math.round(minPrice),
@@ -342,10 +343,10 @@ export async function getPriceSuggestions(
       suggestions: response.records,
     };
   } catch (error) {
-    console.error('❌ Error getting price suggestions:', error);
+    logger.error('❌ Error getting price suggestions:', error);
     
     // Use fallback data on error
-    console.log('🔄 Using fallback market data due to error for:', cropType);
+    logger.debug('🔄 Using fallback market data due to error for:', cropType);
     const fallbackData = FALLBACK_MARKET_DATA[cropType] || [];
     
     if (fallbackData.length === 0) {

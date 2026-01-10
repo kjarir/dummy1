@@ -10,42 +10,51 @@ contract AgriTrace is AccessControl, Ownable2Step, ReentrancyGuard {
     bytes32 public constant DISTRIBUTOR_ROLE = keccak256("DISTRIBUTOR_ROLE");
     bytes32 public constant RETAILER_ROLE = keccak256("RETAILER_ROLE");
 
+    // Enum for call status to save gas (replaces string)
+    enum CallStatus { PENDING, ACTIVE, COMPLETED, CANCELLED }
+    
+    // Enum for grading to save gas (replaces string)
+    enum Grading { NONE, A, B, C, PREMIUM, STANDARD }
+
+    // Optimized struct with packed variables to reduce gas costs
+    // address (20 bytes) + uint96 (12 bytes) = 32 bytes (one slot)
     struct Batch {
-        uint256 id;
-        address farmer;
+        address farmer;              // 20 bytes - packed with freshnessDuration
+        uint96 freshnessDuration;    // 12 bytes - packed with address (total 32 bytes = 1 slot)
+        address currentOwner;        // 20 bytes - separate slot
+        uint256 id;                  // 32 bytes
+        uint256 price;               // 32 bytes
+        uint256 sowingDate;          // Unix timestamp (32 bytes)
+        uint256 harvestDate;         // Unix timestamp (32 bytes)
+        uint256 offTopicCount;       // 32 bytes
+        CallStatus callStatus;       // 1 byte (enum) - stored with Grading
+        Grading grading;             // 1 byte (enum) - stored with CallStatus
+        // Variable length strings (stored separately, expensive)
         string crop;
         string variety;
         string harvestQuantity;
-        string sowingDate;
-        string harvestDate;
-        string freshnessDuration;
-        string grading;
         string certification;
         string labTest;
-        uint256 price;
         string ipfsHash;
         string languageDetected;
         string summary;
-        string callStatus;
-        uint256 offTopicCount;
-        address currentOwner;
     }
 
     struct BatchInput {
         string crop;
         string variety;
         string harvestQuantity;
-        string sowingDate;
-        string harvestDate;
-        string freshnessDuration;
-        string grading;
+        uint256 sowingDate;         // Unix timestamp
+        uint256 harvestDate;        // Unix timestamp
+        uint96 freshnessDuration;   // Optimized from string
+        Grading grading;            // Enum instead of string
         string certification;
         string labTest;
         uint256 price;
         string ipfsHash;
         string languageDetected;
         string summary;
-        string callStatus;
+        CallStatus callStatus;      // Enum instead of string
         uint256 offTopicCount;
     }
 
@@ -65,9 +74,15 @@ contract AgriTrace is AccessControl, Ownable2Step, ReentrancyGuard {
         _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
     }
 
-    // Updated registerBatch - removed role requirement for easier testing
-    function registerBatch(BatchInput calldata input) external {
+    /**
+     * Register a new batch - SECURITY: Role check is RESTORED and REQUIRED
+     * @param input Batch input data with optimized types (uint256 for dates, enums for status/grading)
+     */
+    function registerBatch(BatchInput calldata input) external onlyRole(FARMER_ROLE) {
         require(input.price > 0, "Price must be greater than 0");
+        require(input.sowingDate > 0, "Invalid sowing date");
+        require(input.harvestDate >= input.sowingDate, "Harvest date must be after sowing date");
+        require(input.harvestDate <= block.timestamp, "Harvest date cannot be in the future");
 
         uint256 batchId = nextBatchId++;
         Batch storage b = batches[batchId];
@@ -96,7 +111,9 @@ contract AgriTrace is AccessControl, Ownable2Step, ReentrancyGuard {
         emit BatchRegistered(batchId, msg.sender, input.crop, input.ipfsHash, input.price);
     }
 
-    // New function for recording harvest transactions (called by blockchain transaction manager)
+    /**
+     * Record harvest transaction (called by blockchain transaction manager)
+     */
     function recordHarvest(
         uint256 batchId,
         address farmer,
@@ -112,7 +129,9 @@ contract AgriTrace is AccessControl, Ownable2Step, ReentrancyGuard {
         emit HarvestRecorded(batchId, farmer, crop, variety, quantity, price, ipfsHash);
     }
 
-    // New function for recording purchase transactions (called by blockchain transaction manager)
+    /**
+     * Record purchase transaction (called by blockchain transaction manager)
+     */
     function recordPurchase(
         uint256 batchId,
         address from,
@@ -120,8 +139,9 @@ contract AgriTrace is AccessControl, Ownable2Step, ReentrancyGuard {
         uint256 quantity,
         uint256 price
     ) external {
-        // Verify the batch exists
+        // Verify the batch exists and from is the current owner
         require(batches[batchId].currentOwner == from, "Invalid current owner");
+        require(to != address(0), "Invalid recipient");
         
         // Update ownership
         batches[batchId].currentOwner = to;
@@ -130,13 +150,20 @@ contract AgriTrace is AccessControl, Ownable2Step, ReentrancyGuard {
         emit BatchOwnershipTransferred(batchId, from, to);
     }
 
-    // Function to get batch owner (for blockchain transaction manager)
+    /**
+     * Get batch owner (for blockchain transaction manager)
+     */
     function getBatchOwner(uint256 batchId) external view returns (address) {
+        require(batches[batchId].id != 0, "Batch does not exist");
         return batches[batchId].currentOwner;
     }
 
+    /**
+     * Transfer batch ownership
+     */
     function transferBatch(uint256 batchId, address to) external {
         Batch storage batch = batches[batchId];
+        require(batch.id != 0, "Batch does not exist");
         require(batch.currentOwner == msg.sender, "Not current owner");
         require(to != address(0), "Invalid recipient");
 
@@ -144,8 +171,12 @@ contract AgriTrace is AccessControl, Ownable2Step, ReentrancyGuard {
         emit BatchOwnershipTransferred(batchId, msg.sender, to);
     }
 
+    /**
+     * Update batch price
+     */
     function updatePrice(uint256 batchId, uint256 newPrice) external {
         Batch storage batch = batches[batchId];
+        require(batch.id != 0, "Batch does not exist");
         require(batch.currentOwner == msg.sender, "Not current owner");
         require(newPrice > 0, "Invalid price");
 
@@ -153,9 +184,13 @@ contract AgriTrace is AccessControl, Ownable2Step, ReentrancyGuard {
         emit PriceUpdated(batchId, newPrice);
     }
 
+    /**
+     * Tip a farmer
+     */
     function tipFarmer(address farmer) external payable nonReentrant {
         require(hasRole(FARMER_ROLE, farmer), "Not a farmer");
         require(msg.value > 0, "No ETH sent");
+        require(farmer != address(0), "Invalid farmer address");
 
         (bool success, ) = payable(farmer).call{value: msg.value}("");
         require(success, "Transfer failed");
@@ -164,19 +199,27 @@ contract AgriTrace is AccessControl, Ownable2Step, ReentrancyGuard {
         emit Tipped(msg.sender, farmer, msg.value);
     }
 
+    /**
+     * Admin functions to add roles
+     */
     function addFarmer(address farmer) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        require(farmer != address(0), "Invalid address");
         _grantRole(FARMER_ROLE, farmer);
     }
 
     function addDistributor(address distributor) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        require(distributor != address(0), "Invalid address");
         _grantRole(DISTRIBUTOR_ROLE, distributor);
     }
 
     function addRetailer(address retailer) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        require(retailer != address(0), "Invalid address");
         _grantRole(RETAILER_ROLE, retailer);
     }
 
-    // Helper function to check if address has any role
+    /**
+     * Helper function to check if address has any role
+     */
     function hasAnyRole(address account) external view returns (bool) {
         return hasRole(FARMER_ROLE, account) || 
                hasRole(DISTRIBUTOR_ROLE, account) || 

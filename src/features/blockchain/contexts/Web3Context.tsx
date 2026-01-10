@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import { logger } from '@/lib/logger';
 import { ethers } from 'ethers';
 import { CONTRACT_ADDRESS, NETWORK_CONFIG, DEFAULT_NETWORK } from '@/contracts/config';
 import AgriTraceABI from '@/contracts/AgriTrace.json';
@@ -58,28 +59,28 @@ export const Web3Provider: React.FC<Web3ProviderProps> = ({ children }) => {
       
       // Check current network
       const currentNetworkInfo = await web3Provider.getNetwork();
-      console.log('Current network:', currentNetworkInfo);
+      logger.debug('Current network:', currentNetworkInfo);
       
       // Check if we're on Sepolia Testnet (default)
       const isSepolia = Number(currentNetworkInfo.chainId) === 11155111;
       const isMonad = Number(currentNetworkInfo.chainId) === 10135;
-      console.log('Current chain ID:', currentNetworkInfo.chainId, 'Is Sepolia:', isSepolia, 'Is Monad:', isMonad);
+      logger.debug('Current chain ID:', currentNetworkInfo.chainId, 'Is Sepolia:', isSepolia, 'Is Monad:', isMonad);
       
       if (!isSepolia && !isMonad) {
-        console.log('Not on supported testnet, attempting to switch to Sepolia...');
+        logger.debug('Not on supported testnet, attempting to switch to Sepolia...');
         try {
           // First try to switch to Sepolia Testnet (more reliable)
           await window.ethereum.request({
             method: 'wallet_switchEthereumChain',
             params: [{ chainId: '0xaa36a7' }], // 11155111 in hex (Sepolia Testnet)
           });
-          console.log('Successfully switched to Sepolia Testnet');
+          logger.debug('Successfully switched to Sepolia Testnet');
         } catch (switchError: any) {
-          console.log('Switch error:', switchError);
+          logger.debug('Switch error:', switchError);
           
           // If the network doesn't exist, add it
           if (switchError.code === 4902) {
-            console.log('Sepolia Testnet not found, adding it...');
+            logger.debug('Sepolia Testnet not found, adding it...');
             try {
               await window.ethereum.request({
                 method: 'wallet_addEthereumChain',
@@ -87,8 +88,8 @@ export const Web3Provider: React.FC<Web3ProviderProps> = ({ children }) => {
                   {
                     chainId: '0xaa36a7', // 11155111 in hex
                     chainName: 'Sepolia Testnet',
-                    rpcUrls: ['https://sepolia.infura.io/v3/9aa3d95b3bc440fa88ea12eaa4456161'],
-                    blockExplorerUrls: ['https://sepolia.etherscan.io/'],
+                    rpcUrls: [NETWORK_CONFIG.sepolia.rpcUrl],
+                    blockExplorerUrls: [NETWORK_CONFIG.sepolia.blockExplorer],
                     nativeCurrency: {
                       name: 'Ethereum',
                       symbol: 'ETH',
@@ -97,22 +98,22 @@ export const Web3Provider: React.FC<Web3ProviderProps> = ({ children }) => {
                   },
                 ],
               });
-              console.log('Successfully added Sepolia Testnet');
+              logger.debug('Successfully added Sepolia Testnet');
             } catch (addError: any) {
-              console.error('Error adding Sepolia Testnet:', addError);
-              alert('Failed to add Sepolia Testnet. Please add it manually in MetaMask:\n\nNetwork Name: Sepolia Testnet\nRPC URL: https://sepolia.infura.io/v3/9aa3d95b3bc440fa88ea12eaa4456161\nChain ID: 11155111\nCurrency Symbol: ETH');
+              logger.error('Error adding Sepolia Testnet:', addError);
+              alert(`Failed to add Sepolia Testnet. Please add it manually in MetaMask:\n\nNetwork Name: ${NETWORK_CONFIG.sepolia.name}\nRPC URL: ${NETWORK_CONFIG.sepolia.rpcUrl}\nChain ID: ${NETWORK_CONFIG.sepolia.chainId}\nCurrency Symbol: ETH`);
             }
           } else if (switchError.code === -32002) {
-            console.log('Network switch request already pending, waiting...');
+            logger.debug('Network switch request already pending, waiting...');
             // Wait a bit and try again
             await new Promise(resolve => setTimeout(resolve, 2000));
           } else {
-            console.error('Network switch error:', switchError);
+            logger.error('Network switch error:', switchError);
             alert('Failed to switch to Sepolia Testnet. Please switch manually in MetaMask to Sepolia Testnet (Chain ID: 11155111)');
           }
         }
       } else {
-        console.log('Already on supported testnet:', isSepolia ? 'Sepolia' : 'Monad');
+        logger.debug('Already on supported testnet:', isSepolia ? 'Sepolia' : 'Monad');
       }
       
       // Create contract instance
@@ -152,7 +153,7 @@ export const Web3Provider: React.FC<Web3ProviderProps> = ({ children }) => {
       });
 
     } catch (error) {
-      console.error('Error connecting wallet:', error);
+      logger.error('Error connecting wallet:', error);
       alert('Failed to connect wallet');
     } finally {
       setIsConnecting(false);
@@ -205,11 +206,11 @@ export const Web3Provider: React.FC<Web3ProviderProps> = ({ children }) => {
             ],
           });
         } catch (addError) {
-          console.error('Error adding network:', addError);
+          logger.error('Error adding network:', addError);
           alert('Failed to add network');
         }
       } else {
-        console.error('Error switching network:', error);
+        logger.error('Error switching network:', error);
         alert('Failed to switch network');
       }
     }
@@ -225,7 +226,7 @@ export const Web3Provider: React.FC<Web3ProviderProps> = ({ children }) => {
             await connectWallet();
           }
         } catch (error) {
-          console.error('Error checking connection:', error);
+          logger.error('Error checking connection:', error);
         }
       }
     };

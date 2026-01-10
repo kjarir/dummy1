@@ -1,4 +1,5 @@
 import jsPDF from 'jspdf';
+import { logger } from '@/lib/logger';
 import { transactionManager } from '@/features/blockchain/utils/transactionManager';
 import { TransactionChain, CertificateData } from '@/types/transaction';
 
@@ -27,7 +28,7 @@ export class ImmutableCertificateGenerator {
       const certificateData = await this.buildCertificateData(chain);
       return await this.generatePDF(certificateData);
     } catch (error) {
-      console.error('Error generating certificate from batch ID:', error);
+      logger.error('Error generating certificate from batch ID:', error);
       throw new Error('Failed to generate certificate from batch ID');
     }
   }
@@ -48,7 +49,7 @@ export class ImmutableCertificateGenerator {
       const certificateData = await this.buildCertificateData(chain);
       return await this.generatePDF(certificateData);
     } catch (error) {
-      console.error('Error generating certificate from IPFS hash:', error);
+      logger.error('Error generating certificate from IPFS hash:', error);
       throw new Error('Failed to generate certificate from IPFS hash');
     }
   }
@@ -59,7 +60,7 @@ export class ImmutableCertificateGenerator {
   private async buildCertificateData(chain: TransactionChain): Promise<CertificateData> {
     // Handle case where no transactions exist (group-based system)
     if (chain.transactions.length === 0) {
-      console.warn('No transactions found for batch, using group-based system fallback');
+      logger.warn('No transactions found for batch, using group-based system fallback');
       return {
         batchId: chain.batchId,
         productDetails: {

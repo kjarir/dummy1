@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { logger } from '@/lib/logger';
 import { Link, useNavigate } from 'react-router-dom';
 import { supabase } from '@/integrations/supabase/client';
 import { useToast } from '@/components/ui/use-toast';
@@ -40,7 +41,7 @@ export const Signup = () => {
     setIsLoading(true);
 
     try {
-      console.log('🔍 Attempting signup for:', email);
+      logger.debug('Attempting signup', { email: email.substring(0, 10) + '...' });
       
       const { data, error } = await supabase.auth.signUp({
         email,
@@ -58,14 +59,14 @@ export const Signup = () => {
       });
 
       if (error) {
-        console.error('❌ Signup error:', error);
+        logger.error('Signup error', error);
         toast({
           variant: "destructive",
           title: "Signup failed",
           description: error.message || "Error sending confirmation email. Please check your Supabase configuration.",
         });
       } else {
-        console.log('✅ Signup successful:', data);
+        logger.debug('Signup successful', { userId: data?.user?.id });
         
         // Driver profile will be auto-created by database trigger when profile is created with user_type='driver'
         
@@ -78,7 +79,7 @@ export const Signup = () => {
         navigate('/login');
       }
     } catch (error) {
-      console.error('❌ Unexpected signup error:', error);
+      logger.error('Unexpected signup error', error);
       const errorMessage = error instanceof Error ? error.message : "An unexpected error occurred.";
       toast({
         variant: "destructive",

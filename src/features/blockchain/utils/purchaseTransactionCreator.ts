@@ -1,4 +1,5 @@
 import { transactionManager } from '@/features/blockchain/utils/transactionManager';
+import { logger } from '@/lib/logger';
 import { SupplyChainTransaction } from '@/types/transaction';
 
 /**
@@ -68,10 +69,10 @@ export class PurchaseTransactionCreator {
         }
       );
 
-      console.log(`Created purchase transaction for batch ${batchId}: ${purchaseTransaction.transactionId}`);
+      logger.debug(`Created purchase transaction for batch ${batchId}: ${purchaseTransaction.transactionId}`);
       return purchaseTransaction.transactionId;
     } catch (error) {
-      console.error('Error creating purchase transaction:', error);
+      logger.error('Error creating purchase transaction:', error);
       throw new Error('Failed to create purchase transaction');
     }
   }
@@ -84,7 +85,7 @@ export class PurchaseTransactionCreator {
       const chain = await transactionManager.getTransactionChain(batchId);
       return chain.currentOwners[owner]?.quantity || 0;
     } catch (error) {
-      console.error('Error getting available quantity from owner:', error);
+      logger.error('Error getting available quantity from owner:', error);
       return 0;
     }
   }
@@ -99,7 +100,7 @@ export class PurchaseTransactionCreator {
         Object.entries(chain.currentOwners).map(([owner, data]) => [owner, data.quantity])
       );
     } catch (error) {
-      console.error('Error getting current owners:', error);
+      logger.error('Error getting current owners:', error);
       return {};
     }
   }
@@ -140,7 +141,7 @@ export class PurchaseTransactionCreator {
 
       return { isValid: true };
     } catch (error) {
-      console.error('Error verifying purchase:', error);
+      logger.error('Error verifying purchase:', error);
       return { isValid: false, error: 'Failed to verify purchase' };
     }
   }
@@ -153,7 +154,7 @@ export class PurchaseTransactionCreator {
       const transactions = await transactionManager.getBatchTransactions(batchId);
       return transactions.filter(tx => tx.type === 'PURCHASE');
     } catch (error) {
-      console.error('Error getting purchase history:', error);
+      logger.error('Error getting purchase history:', error);
       return [];
     }
   }
@@ -166,7 +167,7 @@ export class PurchaseTransactionCreator {
       const chain = await transactionManager.getTransactionChain(batchId);
       return chain.totalQuantity - chain.availableQuantity;
     } catch (error) {
-      console.error('Error getting total sold quantity:', error);
+      logger.error('Error getting total sold quantity:', error);
       return 0;
     }
   }

@@ -1,6 +1,8 @@
 import { ethers } from 'ethers';
+import { logger } from '@/lib/logger';
 import { CONTRACT_ADDRESS } from '@/contracts/config';
 import AgriTraceABI from '@/contracts/AgriTrace.json';
+import { validateInteger } from '@/lib/security';
 
 export interface BlockchainTransaction {
   batchId: string;
@@ -50,7 +52,7 @@ export class BlockchainTransactionManager {
       throw new Error('Signer required for blockchain transactions');
     }
 
-    console.log('🔍 DEBUG: Recording harvest transaction on blockchain:', {
+    logger.debug('🔍 DEBUG: Recording harvest transaction on blockchain:', {
       batchId,
       farmerAddress,
       cropType,
@@ -61,8 +63,11 @@ export class BlockchainTransactionManager {
     });
 
     try {
+      // Validate batchId is a valid number (blockchain batch ID)
+      const numericBatchId = validateInteger(batchId, { min: 0 });
+      
       const tx = await this.contract.recordHarvest(
-        batchId,
+        numericBatchId,
         farmerAddress,
         cropType,
         variety,
@@ -72,11 +77,11 @@ export class BlockchainTransactionManager {
       );
 
       const receipt = await tx.wait();
-      console.log('🔍 DEBUG: Harvest transaction receipt:', receipt);
+      logger.debug('🔍 DEBUG: Harvest transaction receipt:', receipt);
       
       // Get block details for verification
       const block = await this.provider.getBlock(receipt.blockNumber);
-      console.log('🔍 DEBUG: Block details for verification:', {
+      logger.debug('🔍 DEBUG: Block details for verification:', {
         blockNumber: receipt.blockNumber,
         blockHash: block?.hash,
         timestamp: block?.timestamp,
@@ -86,11 +91,11 @@ export class BlockchainTransactionManager {
       });
       
       // Log verification info for Sepolia Explorer
-      console.log('🔍 VERIFICATION INFO - Sepolia Explorer:');
-      console.log(`Transaction Hash: ${receipt.hash}`);
-      console.log(`Block Number: ${receipt.blockNumber}`);
-      console.log(`Block Hash: ${block?.hash}`);
-      console.log(`Explorer URL: https://sepolia.etherscan.io/tx/${receipt.hash}`);
+      logger.debug('🔍 VERIFICATION INFO - Sepolia Explorer:');
+      logger.debug(`Transaction Hash: ${receipt.hash}`);
+      logger.debug(`Block Number: ${receipt.blockNumber}`);
+      logger.debug(`Block Hash: ${block?.hash}`);
+      logger.debug(`Explorer URL: https://sepolia.etherscan.io/tx/${receipt.hash}`);
 
       return {
         batchId,
@@ -105,13 +110,14 @@ export class BlockchainTransactionManager {
         ipfsHash
       };
     } catch (error) {
-      console.error('Error recording harvest transaction:', error);
+      logger.error('Error recording harvest transaction:', error);
       throw error;
     }
   }
 
   /**
    * Record a purchase transaction on blockchain
+   * FIXED: Now accepts actual blockchainBatchId instead of generating fake ID
    */
   async recordPurchaseTransaction(
     batchId: string,
@@ -119,41 +125,45 @@ export class BlockchainTransactionManager {
     toAddress: string,
     quantity: number,
     price: number,
+    blockchainBatchId: number, // REQUIRED: Actual blockchain batch ID from registration
     transactionType: 'PURCHASE' | 'TRANSFER' = 'PURCHASE'
   ): Promise<BlockchainTransaction> {
     if (!this.signer) {
       throw new Error('Signer required for blockchain transactions');
     }
 
-    console.log('🔍 DEBUG: Recording purchase transaction on blockchain:', {
+    // Validate blockchainBatchId is provided and valid
+    if (blockchainBatchId === undefined || blockchainBatchId === null) {
+      throw new Error('blockchainBatchId is required. This must be the actual batch ID from blockchain registration.');
+    }
+
+    if (!Number.isInteger(blockchainBatchId) || blockchainBatchId < 0) {
+      throw new Error(`Invalid blockchainBatchId: ${blockchainBatchId}. Must be a non-negative integer.`);
+    }
+
+    logger.debug('🔍 DEBUG: Recording purchase transaction on blockchain:', {
       batchId,
       fromAddress,
       toAddress,
       quantity,
       price,
+      blockchainBatchId,
       transactionType
     });
 
     try {
-      // Convert UUID to a numeric ID for blockchain (use timestamp or hash)
-      const numericBatchId = Date.now(); // Use timestamp as numeric ID
-      
-      console.log('🔍 DEBUG: Converting batchId for blockchain:', {
-        originalBatchId: batchId,
-        numericBatchId: numericBatchId
-      });
-      
+      // Use the actual blockchain batch ID
       const tx = await this.contract.transferBatch(
-        numericBatchId,
+        blockchainBatchId,
         toAddress
       );
 
       const receipt = await tx.wait();
-      console.log('🔍 DEBUG: Purchase transaction receipt:', receipt);
+      logger.debug('🔍 DEBUG: Purchase transaction receipt:', receipt);
       
       // Get block details for verification
       const block = await this.provider.getBlock(receipt.blockNumber);
-      console.log('🔍 DEBUG: Block details for verification:', {
+      logger.debug('🔍 DEBUG: Block details for verification:', {
         blockNumber: receipt.blockNumber,
         blockHash: block?.hash,
         timestamp: block?.timestamp,
@@ -163,11 +173,11 @@ export class BlockchainTransactionManager {
       });
       
       // Log verification info for Sepolia Explorer
-      console.log('🔍 VERIFICATION INFO - Sepolia Explorer:');
-      console.log(`Transaction Hash: ${receipt.hash}`);
-      console.log(`Block Number: ${receipt.blockNumber}`);
-      console.log(`Block Hash: ${block?.hash}`);
-      console.log(`Explorer URL: https://sepolia.etherscan.io/tx/${receipt.hash}`);
+      logger.debug('🔍 VERIFICATION INFO - Sepolia Explorer:');
+      logger.debug(`Transaction Hash: ${receipt.hash}`);
+      logger.debug(`Block Number: ${receipt.blockNumber}`);
+      logger.debug(`Block Hash: ${block?.hash}`);
+      logger.debug(`Explorer URL: https://sepolia.etherscan.io/tx/${receipt.hash}`);
 
       return {
         batchId,
@@ -181,7 +191,7 @@ export class BlockchainTransactionManager {
         blockNumber: receipt.blockNumber
       };
     } catch (error) {
-      console.error('Error recording purchase transaction:', error);
+      logger.error('Error recording purchase transaction:', error);
       throw error;
     }
   }
@@ -190,7 +200,7 @@ export class BlockchainTransactionManager {
    * Get transaction history for a batch from blockchain
    */
   async getBatchTransactionHistory(batchId: string): Promise<BlockchainTransaction[]> {
-    console.log('🔍 DEBUG: Fetching transaction history for batch:', batchId);
+    logger.debug('🔍 DEBUG: Fetching transaction history for batch:', batchId);
 
     try {
       // Get harvest events
@@ -241,10 +251,10 @@ export class BlockchainTransactionManager {
       // Sort by block number (chronological order)
       transactions.sort((a, b) => a.blockNumber - b.blockNumber);
 
-      console.log('🔍 DEBUG: Found transactions:', transactions);
+      logger.debug('🔍 DEBUG: Found transactions:', transactions);
       return transactions;
     } catch (error) {
-      console.error('Error fetching transaction history:', error);
+      logger.error('Error fetching transaction history:', error);
       return [];
     }
   }
@@ -254,10 +264,11 @@ export class BlockchainTransactionManager {
    */
   async getBatchCurrentOwner(batchId: string): Promise<string | null> {
     try {
-      const owner = await this.contract.getBatchOwner(batchId);
+      const numericBatchId = validateInteger(batchId, { min: 0 });
+      const owner = await this.contract.getBatchOwner(numericBatchId);
       return owner;
     } catch (error) {
-      console.error('Error getting batch owner:', error);
+      logger.error('Error getting batch owner:', error);
       return null;
     }
   }
@@ -270,7 +281,7 @@ export class BlockchainTransactionManager {
       const tx = await this.provider.getTransaction(transactionHash);
       return tx !== null;
     } catch (error) {
-      console.error('Error verifying transaction:', error);
+      logger.error('Error verifying transaction:', error);
       return false;
     }
   }
@@ -288,7 +299,7 @@ export class BlockchainTransactionManager {
         receipt: receipt
       };
     } catch (error) {
-      console.error('Error getting transaction details:', error);
+      logger.error('Error getting transaction details:', error);
       return null;
     }
   }

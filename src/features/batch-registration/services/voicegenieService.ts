@@ -5,10 +5,15 @@
 
 import { extractCropDataFromTranscript } from '@/features/ai-services/services/geminiService';
 import { supabase } from '@/integrations/supabase/client';
+import { logger } from '@/lib/logger';
+import { Tables } from '@/integrations/supabase/types';
 
-const VOICEGENIE_API_BASE_URL = 'https://voiceagent-6h5b.onrender.com/api';
-// API Token from VoiceGenie (can be overridden by env variable)
-const VOICEGENIE_API_KEY = import.meta.env.VITE_VOICEGENIE_API_KEY || '8253468265e5643497b21fb4f119a8d0';
+const VOICEGENIE_API_BASE_URL = import.meta.env.VITE_VOICEGENIE_API_BASE_URL || 'https://voiceagent-6h5b.onrender.com/api';
+const VOICEGENIE_API_KEY = import.meta.env.VITE_VOICEGENIE_API_KEY;
+
+if (!VOICEGENIE_API_KEY) {
+  throw new Error('VITE_VOICEGENIE_API_KEY environment variable is required');
+}
 
 // Global flag to skip Gemini when daily quota is exceeded
 let geminiDailyQuotaExceeded = false;
@@ -109,27 +114,50 @@ interface VoiceGenieApiResponse {
 /**
  * Check database for cached call data
  */
-async function getCachedCallData(callId: string): Promise<any | null> {
+interface VoiceGenieCallRow {
+  id?: string;
+  call_id: string;
+  phone_number?: string | null;
+  farmer_name?: string | null;
+  farmer_location?: string | null;
+  language?: string;
+  status?: string;
+  raw_call_data?: unknown;
+  transcript?: string | null;
+  call_summary?: string | null;
+  call_duration?: number | null;
+  call_recording_url?: string | null;
+  received_at?: string | null;
+  collected_data?: Record<string, unknown>;
+  confidence_score?: number | null;
+  validation_errors?: string[];
+  uncertain_fields?: string[];
+  notes?: string | null;
+  gemini_extracted?: boolean;
+  gemini_extracted_at?: string | null;
+}
+
+async function getCachedCallData(callId: string): Promise<VoiceGenieCallRow | null> {
   try {
-    const { data, error } = await (supabase as any)
+    const { data, error } = await supabase
       .from('voicegenie_calls')
       .select('*')
       .eq('call_id', callId)
-      .single();
+      .single<VoiceGenieCallRow>();
     
     if (error && error.code !== 'PGRST116') { // PGRST116 = not found
-      console.warn('⚠️ Error checking cache:', error);
+      logger.warn('⚠️ Error checking cache:', error);
       return null;
     }
     
     if (data) {
-      console.log('✅ Found cached data for call:', callId);
+      logger.debug('✅ Found cached data for call:', callId);
       return data;
     }
     
     return null;
   } catch (error) {
-    console.warn('⚠️ Error checking cache:', error);
+    logger.warn('⚠️ Error checking cache:', error);
     return null;
   }
 }
@@ -137,8 +165,21 @@ async function getCachedCallData(callId: string): Promise<any | null> {
 /**
  * Extract structured data from VoiceGenie JSON response efficiently
  */
-function extractStructuredDataFromJson(rawCall: VoiceGenieApiRawCall): any {
-  const extracted: any = {};
+interface ExtractedData {
+  cropType?: string;
+  variety?: string;
+  farmLocation?: string;
+  location?: string;
+  harvestQuantity?: number;
+  pricePerKg?: number;
+  farmerName?: string;
+  farmerPhone?: string;
+  farmerEmail?: string;
+  [key: string]: unknown;
+}
+
+function extractStructuredDataFromJson(rawCall: VoiceGenieApiRawCall): ExtractedData {
+  const extracted: ExtractedData = {};
   
   // Extract from rawPayload.answersToQuestion (most reliable)
   if (rawCall.rawPayload?.answersToQuestion) {
@@ -217,7 +258,29 @@ async function saveCallToCache(rawCall: VoiceGenieApiRawCall, mappedCall: VoiceG
     };
     
     // Prepare cache data with extracted JSON values
-    const cacheData: any = {
+    interface CacheDataRow {
+      call_id: string;
+      phone_number?: string | null;
+      farmer_name?: string | null;
+      farmer_location?: string | null;
+      language?: string;
+      status?: string;
+      raw_call_data?: unknown;
+      transcript?: string | null;
+      call_summary?: string | null;
+      call_duration?: number | null;
+      call_recording_url?: string | null;
+      received_at?: string | null;
+      collected_data?: Record<string, unknown>;
+      confidence_score?: number | null;
+      validation_errors?: string[];
+      uncertain_fields?: string[];
+      notes?: string | null;
+      gemini_extracted?: boolean;
+      gemini_extracted_at?: string | null;
+    }
+    
+    const cacheData: CacheDataRow = {
       call_id: rawCall._id,
       phone_number: rawCall.phoneNumber || structuredData.farmerPhone || null,
       farmer_name: mappedCall.farmerName || structuredData.farmerName || null,
@@ -245,7 +308,7 @@ async function saveCallToCache(rawCall: VoiceGenieApiRawCall, mappedCall: VoiceG
       gemini_extracted_at: geminiExtracted ? new Date().toISOString() : null,
     };
 
-    console.log('💾 Saving to database - cacheData:', {
+    logger.debug('💾 Saving to database - cacheData:', {
       call_id: cacheData.call_id,
       gemini_extracted: cacheData.gemini_extracted,
       collected_data_keys: cacheData.collected_data ? Object.keys(cacheData.collected_data) : [],
@@ -255,44 +318,44 @@ async function saveCallToCache(rawCall: VoiceGenieApiRawCall, mappedCall: VoiceG
     });
     
     // Try to insert first
-    const { data: insertData, error: insertError } = await (supabase as any)
+    const { data: insertData, error: insertError } = await supabase
       .from('voicegenie_calls')
       .insert(cacheData)
-      .select();
+      .select<VoiceGenieCallRow>();
     
     // If insert fails due to conflict (unique constraint), update instead
     if (insertError) {
       if (insertError.code === '23505' || insertError.message?.includes('duplicate') || insertError.message?.includes('unique')) {
         // Record exists, update it (especially important for Gemini data)
-        console.log('🔄 Call already exists, updating with latest data (including Gemini)...');
-        const { data: updateData, error: updateError } = await (supabase as any)
+        logger.debug('🔄 Call already exists, updating with latest data (including Gemini)...');
+        const { data: updateData, error: updateError } = await supabase
           .from('voicegenie_calls')
           .update(cacheData)
           .eq('call_id', rawCall._id)
-          .select();
+          .select<VoiceGenieCallRow>();
         
         if (updateError) {
-          console.error('❌ Failed to update cache:', updateError);
+          logger.error('❌ Failed to update cache:', updateError);
           throw updateError; // Throw so caller knows it failed
         } else {
-          console.log('✅ Updated cached call data in database:', rawCall._id);
-          console.log('📊 Updated record ID:', updateData?.[0]?.id);
-          console.log('📊 Gemini extracted flag in DB:', updateData?.[0]?.gemini_extracted);
-          console.log('📊 Collected data in DB:', updateData?.[0]?.collected_data ? Object.keys(updateData[0].collected_data) : 'empty');
+          logger.debug('✅ Updated cached call data in database:', rawCall._id);
+          logger.debug('📊 Updated record ID:', updateData?.[0]?.id);
+          logger.debug('📊 Gemini extracted flag in DB:', updateData?.[0]?.gemini_extracted);
+          logger.debug('📊 Collected data in DB:', updateData?.[0]?.collected_data ? Object.keys(updateData[0].collected_data) : 'empty');
         }
       } else {
-        console.error('❌ Failed to save to cache:', insertError);
+        logger.error('❌ Failed to save to cache:', insertError);
         throw insertError; // Throw so caller knows it failed
       }
     } else {
-      console.log('✅ Successfully inserted call data to database:', rawCall._id);
-      console.log('📊 Inserted record ID:', insertData?.[0]?.id);
-      console.log('📊 Gemini extracted flag in DB:', insertData?.[0]?.gemini_extracted);
-      console.log('📊 Collected data in DB:', insertData?.[0]?.collected_data ? Object.keys(insertData[0].collected_data) : 'empty');
-      console.log('📊 Full collected_data saved:', JSON.stringify(finalCollectedData, null, 2));
+      logger.debug('✅ Successfully inserted call data to database:', rawCall._id);
+      logger.debug('📊 Inserted record ID:', insertData?.[0]?.id);
+      logger.debug('📊 Gemini extracted flag in DB:', insertData?.[0]?.gemini_extracted);
+      logger.debug('📊 Collected data in DB:', insertData?.[0]?.collected_data ? Object.keys(insertData[0].collected_data) : 'empty');
+      logger.debug('📊 Full collected_data saved:', JSON.stringify(finalCollectedData, null, 2));
     }
   } catch (error) {
-    console.warn('⚠️ Error saving to cache:', error);
+    logger.warn('⚠️ Error saving to cache:', error);
   }
 }
 
@@ -301,13 +364,13 @@ async function saveCallToCache(rawCall: VoiceGenieApiRawCall, mappedCall: VoiceG
  * Checks database cache first to avoid unnecessary Gemini API calls
  */
 async function mapRawCallToVoiceGenieCall(rawCall: VoiceGenieApiRawCall): Promise<VoiceGenieCall> {
-  console.log('🔄 Mapping raw call:', rawCall._id);
+  logger.debug('🔄 Mapping raw call:', rawCall._id);
   
   // Check database cache first
   const cachedData = await getCachedCallData(rawCall._id);
   if (cachedData && cachedData.gemini_extracted && cachedData.collected_data) {
-    console.log('✅ Using cached data (Gemini already extracted)');
-    console.log('📊 Cached collected_data:', {
+    logger.debug('✅ Using cached data (Gemini already extracted)');
+    logger.debug('📊 Cached collected_data:', {
       keys: Object.keys(cachedData.collected_data || {}),
       cropType: cachedData.collected_data?.cropType,
       variety: cachedData.collected_data?.variety,
@@ -339,14 +402,14 @@ async function mapRawCallToVoiceGenieCall(rawCall: VoiceGenieApiRawCall): Promis
   // Only if not already cached and daily quota not exceeded
   if (rawCall.transcript && rawCall.transcript.length > 0 && !geminiDailyQuotaExceeded && !cachedData?.gemini_extracted) {
     try {
-      console.log('🤖 Extracting data using Gemini AI from transcript...');
+      logger.debug('🤖 Extracting data using Gemini AI from transcript...');
       const geminiData = await extractCropDataFromTranscript(
         rawCall.transcript,
         rawCall.callSummary || rawCall.rawPayload?.callSummary
       );
       
       if (geminiData && Object.keys(geminiData).length > 0) {
-        console.log('✅ Gemini extracted data:', geminiData);
+        logger.debug('✅ Gemini extracted data:', geminiData);
         geminiExtracted = true;
         // Merge Gemini data (it's the most reliable source)
         Object.assign(collectedData, geminiData);
@@ -356,7 +419,7 @@ async function mapRawCallToVoiceGenieCall(rawCall: VoiceGenieApiRawCall): Promis
         }
         
         // Log that Gemini data was extracted (will be saved at end of function)
-        console.log('💾 Gemini data extracted - will be saved to database cache');
+        logger.debug('💾 Gemini data extracted - will be saved to database cache');
       }
     } catch (geminiError: any) {
       // Check if it's a daily quota error (not just rate limit)
@@ -367,22 +430,22 @@ async function mapRawCallToVoiceGenieCall(rawCall: VoiceGenieApiRawCall): Promis
       
       if (isDailyQuotaExceeded) {
         geminiDailyQuotaExceeded = true; // Set global flag
-        console.warn('⚠️ Gemini daily quota exceeded (20 requests/day). Skipping Gemini extraction for remaining calls and using manual extraction only.');
+        logger.warn('⚠️ Gemini daily quota exceeded (20 requests/day). Skipping Gemini extraction for remaining calls and using manual extraction only.');
       } else {
-        console.warn('⚠️ Gemini extraction failed, falling back to manual extraction:', geminiError);
+        logger.warn('⚠️ Gemini extraction failed, falling back to manual extraction:', geminiError);
       }
     }
   } else if (geminiDailyQuotaExceeded) {
-    console.log('⏭️ Skipping Gemini extraction (daily quota exceeded), using manual extraction only');
+    logger.debug('⏭️ Skipping Gemini extraction (daily quota exceeded), using manual extraction only');
   } else if (cachedData?.gemini_extracted) {
-    console.log('⏭️ Skipping Gemini extraction (already cached), using cached data');
+    logger.debug('⏭️ Skipping Gemini extraction (already cached), using cached data');
   }
   
   // Priority 1: Extract structured data from JSON (efficient extraction)
   // Only merge if Gemini hasn't already extracted (to preserve Gemini data)
   const jsonExtractedData = extractStructuredDataFromJson(rawCall);
   if (Object.keys(jsonExtractedData).length > 0) {
-    console.log('📋 Extracted data from JSON:', jsonExtractedData);
+    logger.debug('📋 Extracted data from JSON:', jsonExtractedData);
     // Only merge fields that don't already exist (don't overwrite Gemini data)
     Object.keys(jsonExtractedData).forEach(key => {
       if (!collectedData[key] || (geminiExtracted && ['cropType', 'variety', 'harvestQuantity', 'sowingDate', 'harvestDate', 'pricePerKg'].includes(key))) {
@@ -397,7 +460,7 @@ async function mapRawCallToVoiceGenieCall(rawCall: VoiceGenieApiRawCall): Promis
   // Priority 2: Extract from answersToQuestion (most structured data)
   if (rawCall.rawPayload?.answersToQuestion) {
     const answers = rawCall.rawPayload.answersToQuestion;
-    console.log('📋 Found answersToQuestion:', answers);
+    logger.debug('📋 Found answersToQuestion:', answers);
     
     // Map answers to our collectedData format (only if not already set)
     if (answers.crop && !collectedData.cropType) {
@@ -430,7 +493,7 @@ async function mapRawCallToVoiceGenieCall(rawCall: VoiceGenieApiRawCall): Promis
   // Priority 3: Extract from top-level answers field
   // Only merge if Gemini hasn't already extracted critical fields
   if (rawCall.answers) {
-    console.log('📋 Found answers field:', rawCall.answers);
+    logger.debug('📋 Found answers field:', rawCall.answers);
     const mergeAnswers = (answers: any) => {
       Object.keys(answers).forEach(key => {
         // If Gemini extracted, don't overwrite critical fields
@@ -456,7 +519,7 @@ async function mapRawCallToVoiceGenieCall(rawCall: VoiceGenieApiRawCall): Promis
   // Priority 4: Extract from rawPayload.customerSpecificData
   if (rawCall.rawPayload?.customerSpecificData) {
     const csData = rawCall.rawPayload.customerSpecificData;
-    console.log('📋 Found customerSpecificData:', csData);
+    logger.debug('📋 Found customerSpecificData:', csData);
     
     // Extract farmer name
     if (csData.Name && !collectedData.farmerName) {
@@ -474,7 +537,7 @@ async function mapRawCallToVoiceGenieCall(rawCall: VoiceGenieApiRawCall): Promis
   // Priority 5: Extract from informationGathered
   if (rawCall.informationGathered || rawCall.rawPayload?.informationGathered) {
     const info = rawCall.informationGathered || rawCall.rawPayload.informationGathered;
-    console.log('📋 Found informationGathered:', info);
+    logger.debug('📋 Found informationGathered:', info);
     
     if (info.language && !collectedData.language) {
       collectedData.language = info.language.toLowerCase();
@@ -484,7 +547,7 @@ async function mapRawCallToVoiceGenieCall(rawCall: VoiceGenieApiRawCall): Promis
   // Priority 5: Try to parse callSummary for additional data
   const summary = rawCall.callSummary || rawCall.rawPayload?.callSummary;
   if (summary) {
-    console.log('📋 Found callSummary:', summary);
+    logger.debug('📋 Found callSummary:', summary);
     
     // Try to extract structured data from summary text
     // Example: "Farmer wants to sell 50 quintals of Basmati rice from Nagpur"
@@ -553,7 +616,7 @@ async function mapRawCallToVoiceGenieCall(rawCall: VoiceGenieApiRawCall): Promis
   
   // Ensure cropType and variety are preserved if they exist
   if (geminiExtracted) {
-    console.log('🔒 Gemini extracted - preserving critical fields:', {
+    logger.debug('🔒 Gemini extracted - preserving critical fields:', {
       cropType: collectedData.cropType,
       variety: collectedData.variety,
       hasCropType: !!collectedData.cropType,
@@ -561,13 +624,13 @@ async function mapRawCallToVoiceGenieCall(rawCall: VoiceGenieApiRawCall): Promis
     });
   }
   
-  console.log('✅ Mapped collectedData:', collectedData);
-  console.log('✅ Confidence score:', confidenceScore);
-  console.log('✅ Gemini extracted:', geminiExtracted);
-  console.log('📊 Final collectedData keys:', Object.keys(collectedData));
-  console.log('📊 Final collectedData:', JSON.stringify(collectedData, null, 2));
-  console.log('🔍 CropType value:', collectedData.cropType, 'Type:', typeof collectedData.cropType);
-  console.log('🔍 Variety value:', collectedData.variety, 'Type:', typeof collectedData.variety);
+  logger.debug('✅ Mapped collectedData:', collectedData);
+  logger.debug('✅ Confidence score:', confidenceScore);
+  logger.debug('✅ Gemini extracted:', geminiExtracted);
+  logger.debug('📊 Final collectedData keys:', Object.keys(collectedData));
+  logger.debug('📊 Final collectedData:', JSON.stringify(collectedData, null, 2));
+  logger.debug('🔍 CropType value:', collectedData.cropType, 'Type:', typeof collectedData.cropType);
+  logger.debug('🔍 Variety value:', collectedData.variety, 'Type:', typeof collectedData.variety);
   
   const mappedCall: VoiceGenieCall = {
     id: rawCall._id,
@@ -586,8 +649,8 @@ async function mapRawCallToVoiceGenieCall(rawCall: VoiceGenieApiRawCall): Promis
   };
   
   // Save to database cache - WAIT for it to complete to ensure data is stored
-  console.log('💾 Saving call data to database cache...');
-  console.log('📊 Saving details:', {
+  logger.debug('💾 Saving call data to database cache...');
+  logger.debug('📊 Saving details:', {
     call_id: rawCall._id,
     gemini_extracted: geminiExtracted,
     has_collected_data: !!mappedCall.collectedData,
@@ -597,11 +660,11 @@ async function mapRawCallToVoiceGenieCall(rawCall: VoiceGenieApiRawCall): Promis
   
   try {
     await saveCallToCache(rawCall, mappedCall, geminiExtracted);
-    console.log('✅ Successfully saved call data to database cache:', rawCall._id);
-    console.log('✅ Gemini extracted flag saved:', geminiExtracted);
-    console.log('✅ Collected data saved:', mappedCall.collectedData ? 'Yes' : 'No');
+    logger.debug('✅ Successfully saved call data to database cache:', rawCall._id);
+    logger.debug('✅ Gemini extracted flag saved:', geminiExtracted);
+    logger.debug('✅ Collected data saved:', mappedCall.collectedData ? 'Yes' : 'No');
   } catch (err) {
-    console.error('❌ Failed to save cache:', err);
+    logger.error('❌ Failed to save cache:', err);
     // Don't throw - continue even if cache save fails, but log the error
   }
   
@@ -617,7 +680,7 @@ export async function fetchVoiceGenieCalls(): Promise<VoiceGenieCall[]> {
     const USE_TEST_DATA = import.meta.env.VITE_USE_VOICEGENIE_TEST_DATA === 'true';
     
     if (USE_TEST_DATA) {
-      console.log('🧪 Using test data instead of API');
+      logger.debug('🧪 Using test data instead of API');
       try {
         // Try to load test data from public folder or use inline test data
         const testResponse = {
@@ -721,20 +784,20 @@ export async function fetchVoiceGenieCalls(): Promise<VoiceGenieCall[]> {
         };
         
         const mappedCalls = testResponse.data.map(mapRawCallToVoiceGenieCall);
-        console.log('✅ Test data loaded:', mappedCalls);
+        logger.debug('✅ Test data loaded:', mappedCalls);
         return mappedCalls;
       } catch (error) {
-        console.error('Failed to load test data:', error);
+        logger.error('Failed to load test data:', error);
         // Fall through to real API
       }
     }
     
-    console.log('🔍 Fetching calls from VoiceGenie API...');
+    logger.debug('🔍 Fetching calls from VoiceGenie API...');
     
     // API endpoint - GET request, no authentication needed
     const url = `${VOICEGENIE_API_BASE_URL}/calls`;
     
-    console.log('📡 Fetching from:', url);
+    logger.debug('📡 Fetching from:', url);
     
     // Simple GET request - no headers needed for public API
     const response = await fetch(url, {
@@ -744,33 +807,33 @@ export async function fetchVoiceGenieCalls(): Promise<VoiceGenieCall[]> {
       },
     });
     
-    console.log('📡 Response status:', response.status);
+    logger.debug('📡 Response status:', response.status);
     
     if (!response.ok) {
       const errorText = await response.text();
-      console.error('❌ VoiceGenie API error:', response.status, errorText);
+      logger.error('❌ VoiceGenie API error:', response.status, errorText);
       throw new Error(`Failed to fetch calls: ${response.status} ${errorText}`);
     }
 
     if (!response.ok) {
       const errorText = await response.text();
-      console.error('VoiceGenie API error:', response.status, errorText);
+      logger.error('VoiceGenie API error:', response.status, errorText);
       throw new Error(`Failed to fetch calls: ${response.status} ${errorText}`);
     }
 
     const responseText = await response.text();
-    console.log('📡 Raw response text:', responseText.substring(0, 500));
+    logger.debug('📡 Raw response text:', responseText.substring(0, 500));
     
     let apiResponse: any;
     try {
       apiResponse = JSON.parse(responseText);
     } catch (parseError) {
-      console.error('❌ Failed to parse JSON response:', parseError);
+      logger.error('❌ Failed to parse JSON response:', parseError);
       throw new Error('Invalid JSON response from API');
     }
     
-    console.log('✅ VoiceGenie API parsed response:', apiResponse);
-    console.log('📊 Response structure:', {
+    logger.debug('✅ VoiceGenie API parsed response:', apiResponse);
+    logger.debug('📊 Response structure:', {
       success: apiResponse.success,
       count: apiResponse.count,
       hasData: !!apiResponse.data,
@@ -781,10 +844,10 @@ export async function fetchVoiceGenieCalls(): Promise<VoiceGenieCall[]> {
     
     // Handle the actual API response structure: { success, count, data: [...] }
     if (apiResponse.success === true && apiResponse.data && Array.isArray(apiResponse.data)) {
-      console.log(`📞 Found ${apiResponse.data.length} calls from API`);
+      logger.debug(`📞 Found ${apiResponse.data.length} calls from API`);
       
       if (apiResponse.data.length === 0) {
-        console.warn('⚠️ API returned empty data array');
+        logger.warn('⚠️ API returned empty data array');
         return [];
       }
       
@@ -794,7 +857,7 @@ export async function fetchVoiceGenieCalls(): Promise<VoiceGenieCall[]> {
       
       for (let index = 0; index < apiResponse.data.length; index++) {
         const rawCall = apiResponse.data[index];
-        console.log(`🔄 Mapping call ${index + 1}/${apiResponse.data.length}:`, rawCall._id);
+        logger.debug(`🔄 Mapping call ${index + 1}/${apiResponse.data.length}:`, rawCall._id);
         
         try {
           const mappedCall = await mapRawCallToVoiceGenieCall(rawCall);
@@ -805,11 +868,11 @@ export async function fetchVoiceGenieCalls(): Promise<VoiceGenieCall[]> {
           // The actual Gemini rate limiting (15s between calls) is handled in geminiService.ts
           if (index < apiResponse.data.length - 1) {
             const delayMs = 2000; // 2 seconds between processing calls (Gemini has its own 15s delay)
-            console.log(`⏳ Waiting ${delayMs}ms before processing next call...`);
+            logger.debug(`⏳ Waiting ${delayMs}ms before processing next call...`);
             await new Promise(resolve => setTimeout(resolve, delayMs));
           }
         } catch (mapError) {
-          console.error(`❌ Error mapping call ${rawCall._id}:`, mapError);
+          logger.error(`❌ Error mapping call ${rawCall._id}:`, mapError);
           // Return a basic call structure even if mapping fails
           mappedCalls.push({
             id: rawCall._id || `unknown-${index}`,
@@ -835,8 +898,8 @@ export async function fetchVoiceGenieCalls(): Promise<VoiceGenieCall[]> {
         }
       }
       
-      console.log('✅ Successfully mapped all calls:', mappedCalls.length);
-      console.log('📋 Mapped calls summary:', mappedCalls.map(c => ({
+      logger.debug('✅ Successfully mapped all calls:', mappedCalls.length);
+      logger.debug('📋 Mapped calls summary:', mappedCalls.map(c => ({
         id: c.id,
         phone: c.phone,
         farmerName: c.farmerName,
@@ -850,23 +913,23 @@ export async function fetchVoiceGenieCalls(): Promise<VoiceGenieCall[]> {
     
     // Fallback: Handle different response formats
     if (Array.isArray(apiResponse)) {
-      console.log('📞 API returned array directly');
+      logger.debug('📞 API returned array directly');
       const mappedPromises = apiResponse.map(mapRawCallToVoiceGenieCall);
       return await Promise.all(mappedPromises);
     } else if (apiResponse.calls && Array.isArray(apiResponse.calls)) {
-      console.log('📞 API returned calls array');
+      logger.debug('📞 API returned calls array');
       return apiResponse.calls;
     } else if (apiResponse.call) {
-      console.log('📞 API returned single call');
+      logger.debug('📞 API returned single call');
       return [apiResponse.call];
     } else {
-      console.error('❌ Unexpected VoiceGenie API response format:', apiResponse);
-      console.error('❌ Response keys:', Object.keys(apiResponse));
-      console.error('❌ Full response:', JSON.stringify(apiResponse, null, 2));
+      logger.error('❌ Unexpected VoiceGenie API response format:', apiResponse);
+      logger.error('❌ Response keys:', Object.keys(apiResponse));
+      logger.error('❌ Full response:', JSON.stringify(apiResponse, null, 2));
       return [];
     }
   } catch (error) {
-    console.error('Error fetching VoiceGenie calls:', error);
+    logger.error('Error fetching VoiceGenie calls:', error);
     throw error;
   }
 }
@@ -900,15 +963,15 @@ export async function fetchVoiceGenieCall(callId: string): Promise<VoiceGenieCal
     // Handle different response formats
     if (apiResponse.data && Array.isArray(apiResponse.data) && apiResponse.data.length > 0) {
       return mapRawCallToVoiceGenieCall(apiResponse.data[0]);
-    } else if ((apiResponse as any)._id) {
-      return mapRawCallToVoiceGenieCall(apiResponse as any);
+    } else if ('_id' in apiResponse && typeof (apiResponse as VoiceGenieApiRawCall)._id === 'string') {
+      return mapRawCallToVoiceGenieCall(apiResponse as VoiceGenieApiRawCall);
     } else if (apiResponse.call) {
       return apiResponse.call;
     }
     
     return null;
   } catch (error) {
-    console.error('Error fetching VoiceGenie call:', error);
+    logger.error('Error fetching VoiceGenie call:', error);
     throw error;
   }
 }

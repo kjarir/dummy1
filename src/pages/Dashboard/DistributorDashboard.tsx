@@ -1,6 +1,9 @@
 import { useState, useEffect } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
+import { Tables } from '@/integrations/supabase/types';
+import { logger } from '@/lib/logger';
+import { sanitizeError, sanitizeString } from '@/lib/security';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -29,7 +32,7 @@ export const DistributorDashboard = () => {
     totalRevenue: 0,
     activeInventory: 0
   });
-  const [recentTransactions, setRecentTransactions] = useState<any[]>([]);
+  const [recentTransactions, setRecentTransactions] = useState<Array<Record<string, unknown>>>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -42,41 +45,36 @@ export const DistributorDashboard = () => {
     try {
       setLoading(true);
       
-      console.log('🔍 DEBUG: Fetching dashboard data for user:', user?.id);
+      logger.debug('Fetching dashboard data for user', { userId: sanitizeString(user?.id, 100) });
       
       // Get the distributor's profile ID first
       const { data: profile, error: profileError } = await supabase
         .from('profiles')
         .select('id')
-        .eq('user_id', user?.id)
-        .single();
+        .eq('user_id', user?.id || '')
+        .single<Pick<Tables<'profiles'>, 'id'>>();
 
       if (profileError || !profile) {
-        console.error('❌ Profile lookup error:', profileError);
+        logger.error('Profile lookup error', profileError);
         setStats({ totalPurchases: 0, totalSales: 0, totalRevenue: 0 });
         return;
       }
 
-      console.log('🔍 DEBUG: Found profile ID:', profile.id);
+      logger.debug('Found profile ID', { profileId: sanitizeString(profile.id, 100) });
       
       // Get distributor's purchases from transactions table (simplified query)
       const { data: purchases, error: purchasesError } = await supabase
         .from('transactions')
         .select('*')
-        .eq('buyer_id', profile.id)
-        .eq('transaction_type', 'PURCHASE')
-        .order('created_at', { ascending: false });
+        .eq('to_address', profile.id)
+        .eq('type', 'PURCHASE')
+        .order('transaction_timestamp', { ascending: false })
+        .returns<Tables<'transactions'>[]>();
 
-      console.log('🔍 DEBUG: Purchases query result:', { purchases, purchasesError });
-      console.log('🔍 DEBUG: User ID:', user?.id);
-
-      // Debug: Check all transactions in the database
-      const { data: allTransactions } = await supabase
-        .from('transactions')
-        .select('*')
-        .limit(10);
-      
-      console.log('🔍 DEBUG: All transactions in database:', allTransactions);
+      logger.debug('Purchases query result', { 
+        count: purchases?.length || 0, 
+        error: purchasesError ? sanitizeError(purchasesError) : undefined 
+      });
 
       // Get batch details separately for each purchase
       let purchasesWithDetails = [];
@@ -97,7 +95,7 @@ export const DistributorDashboard = () => {
         });
       }
 
-      console.log('🔍 DEBUG: Purchases with details:', purchasesWithDetails);
+      logger.debug('Purchases with details', { count: purchasesWithDetails.length });
 
       // Get distributor's sales (batches they own that are available for sale)
       const { data: sales } = await supabase
@@ -115,7 +113,7 @@ export const DistributorDashboard = () => {
 
       setRecentTransactions(purchasesWithDetails?.slice(0, 5) || []);
     } catch (error) {
-      console.error('Error fetching distributor dashboard data:', error);
+      logger.error('Error fetching distributor dashboard data', error);
     } finally {
       setLoading(false);
     }

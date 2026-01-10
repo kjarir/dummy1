@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { logger } from '@/lib/logger';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -54,7 +55,7 @@ export const MarketPriceTest: React.FC = () => {
         variety={variety}
         state={state}
         onPriceSelect={(price) => {
-          console.log('Selected price:', price);
+          logger.debug('Selected price:', price);
           alert(`Selected price: ₹${price}/quintal`);
         }}
       />

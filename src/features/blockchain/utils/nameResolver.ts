@@ -1,4 +1,5 @@
 import { supabase } from '@/integrations/supabase/client';
+import { logger } from '@/lib/logger';
 
 /**
  * Name Resolution Utility
@@ -59,7 +60,7 @@ export class NameResolver {
       this.nameCache.set(identifier, fallbackName);
       return fallbackName;
     } catch (error) {
-      console.error('Error resolving name:', error);
+      logger.error('Error resolving name:', error);
       const fallbackName = this.getFallbackName(identifier);
       this.nameCache.set(identifier, fallbackName);
       return fallbackName;
@@ -103,12 +104,12 @@ export class NameResolver {
         }
       } catch (adminError) {
         // Admin API might not be available in client-side, ignore
-        console.warn('Admin API not available for user lookup:', adminError);
+        logger.warn('Admin API not available for user lookup:', adminError);
       }
 
       return this.getFallbackName(walletAddress);
     } catch (error) {
-      console.error('Error resolving wallet address:', error);
+      logger.error('Error resolving wallet address:', error);
       return this.getFallbackName(walletAddress);
     }
   }
@@ -137,7 +138,7 @@ export class NameResolver {
         }
       } catch (adminError) {
         // Admin API might not be available in client-side, ignore
-        console.warn('Admin API not available for user lookup:', adminError);
+        logger.warn('Admin API not available for user lookup:', adminError);
       }
 
       // Try to find in profiles by user_id if we have it
@@ -161,7 +162,7 @@ export class NameResolver {
 
       return this.getFallbackName(email);
     } catch (error) {
-      console.error('Error resolving email:', error);
+      logger.error('Error resolving email:', error);
       return this.getFallbackName(email);
     }
   }
@@ -183,7 +184,7 @@ export class NameResolver {
 
       return this.getFallbackName(profileId);
     } catch (error) {
-      console.error('Error resolving profile ID:', error);
+      logger.error('Error resolving profile ID:', error);
       return this.getFallbackName(profileId);
     }
   }

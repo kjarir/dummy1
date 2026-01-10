@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { logger } from '@/lib/logger';
 import { PINATA_CONFIG } from '@/contracts/config';
 
 /**
@@ -57,7 +58,7 @@ export class IPFSService {
       );
       return response.data;
     } catch (error) {
-      console.error('Error uploading file to IPFS:', error);
+      logger.error('Error uploading file to IPFS:', error);
       throw new Error('Failed to upload file to IPFS');
     }
   }
@@ -85,7 +86,7 @@ export class IPFSService {
       const response = await this.uploadFile(pdfBlob, fileName, pinataMetadata);
       return response.IpfsHash;
     } catch (error) {
-      console.error('Error uploading certificate to IPFS:', error);
+      logger.error('Error uploading certificate to IPFS:', error);
       throw new Error('Failed to upload certificate to IPFS');
     }
   }
@@ -101,9 +102,9 @@ export class IPFSService {
           'pinata_secret_api_key': this.apiSecret,
         },
       });
-      console.log(`Unpinned file: ${ipfsHash}`);
+      logger.debug(`Unpinned file: ${ipfsHash}`);
     } catch (error) {
-      console.error('Error unpinning file from IPFS:', error);
+      logger.error('Error unpinning file from IPFS:', error);
       throw new Error('Failed to unpin file from IPFS');
     }
   }
@@ -126,7 +127,7 @@ export class IPFSService {
       // Upload new file
       return await this.uploadFile(file, fileName, metadata);
     } catch (error) {
-      console.error('Error updating pinned file:', error);
+      logger.error('Error updating pinned file:', error);
       throw new Error('Failed to update pinned file');
     }
   }
@@ -147,7 +148,7 @@ export class IPFSService {
       );
       return response.data;
     } catch (error) {
-      console.error('Error getting file info from IPFS:', error);
+      logger.error('Error getting file info from IPFS:', error);
       throw new Error('Failed to get file info from IPFS');
     }
   }
@@ -191,7 +192,7 @@ export async function uploadBatchMetadataToIPFS(batchData: any, batchId: string)
       }
     ).then(response => response.IpfsHash);
   } catch (error) {
-    console.error('Error uploading batch metadata to IPFS:', error);
+    logger.error('Error uploading batch metadata to IPFS:', error);
     throw new Error('Failed to upload batch metadata to IPFS');
   }
 }

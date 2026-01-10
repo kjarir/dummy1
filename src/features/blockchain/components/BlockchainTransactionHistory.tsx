@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { logger } from '@/lib/logger';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -28,13 +29,13 @@ export const BlockchainTransactionHistory: React.FC<BlockchainTransactionHistory
       setLoading(true);
       setError(null);
       
-      console.log('🔍 DEBUG: Fetching blockchain transaction history for batch:', batchId);
+      logger.debug('🔍 DEBUG: Fetching blockchain transaction history for batch:', batchId);
       const history = await blockchainTransactionManager.getBatchTransactionHistory(batchId);
       
-      console.log('🔍 DEBUG: Blockchain transaction history:', history);
+      logger.debug('🔍 DEBUG: Blockchain transaction history:', history);
       setTransactions(history);
     } catch (err) {
-      console.error('Error fetching blockchain transaction history:', err);
+      logger.error('Error fetching blockchain transaction history:', err);
       setError('Failed to fetch transaction history from blockchain');
     } finally {
       setLoading(false);

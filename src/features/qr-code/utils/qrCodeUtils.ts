@@ -1,4 +1,5 @@
 /**
+import { logger } from '@/lib/logger';
  * Comprehensive QR Code Utilities for AgriTrace
  * Handles QR code generation for the entire farmer-distributor-retailer flow
  */
@@ -63,7 +64,7 @@ export async function generateQRCodeDataURL(data: string | object, size: number 
     });
     return qrCodeDataURL;
   } catch (error) {
-    console.error('Error generating QR code:', error);
+    logger.error('Error generating QR code:', error);
     throw new Error('Failed to generate QR code');
   }
 }
@@ -142,7 +143,7 @@ export function downloadQRCode(dataURL: string, filename: string): void {
     link.click();
     document.body.removeChild(link);
   } catch (error) {
-    console.error('Error downloading QR code:', error);
+    logger.error('Error downloading QR code:', error);
     throw new Error('Failed to download QR code');
   }
 }
@@ -166,7 +167,7 @@ export function parseQRCodeData(qrString: string): QRCodeData | null {
     
     return data as QRCodeData;
   } catch (error) {
-    console.error('Error parsing QR code data:', error);
+    logger.error('Error parsing QR code data:', error);
     return null;
   }
 }

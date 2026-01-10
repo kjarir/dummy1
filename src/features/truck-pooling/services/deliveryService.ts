@@ -1,4 +1,6 @@
 import { supabase } from '@/integrations/supabase/client';
+import { logger } from '@/lib/logger';
+import { safeJsonParse, sanitizeError, validateInteger } from '@/lib/security';
 
 export interface DeliveryRequest {
   id: string;
@@ -41,8 +43,8 @@ export interface DeliveryRequest {
   buyer_confirmation?: boolean;
   created_at: string;
   updated_at: string;
-  batches?: any;
-  profiles?: any;
+  batches?: Record<string, unknown>;
+  profiles?: Record<string, unknown>;
 }
 
 export interface CreateDeliveryRequestParams {
@@ -152,7 +154,7 @@ export async function createDeliveryRequest(
     const deliveryFee = calculateDeliveryFee(distance, params.quantityKg, urgencyScore);
 
     // Create delivery request
-    console.log('🚚 Creating delivery request:', {
+    logger.debug('Creating delivery request', {
       batchId: params.batchId,
       sourceLocation: params.sourceLocation,
       destinationLocation: params.destinationLocation,
@@ -166,7 +168,7 @@ export async function createDeliveryRequest(
         transactionIdNum = params.transactionId;
       } else if (typeof params.transactionId === 'string') {
         // Only convert if it's a valid number string (not "TXN-123-abc" format)
-        const parsed = parseInt(params.transactionId, 10);
+        const parsed = validateInteger(params.transactionId, 1, Number.MAX_SAFE_INTEGER);
         if (!isNaN(parsed) && parsed.toString() === params.transactionId) {
           transactionIdNum = parsed;
         }
@@ -186,7 +188,7 @@ export async function createDeliveryRequest(
       payment_status: 'pending',
     };
 
-    console.log('🚚 Inserting delivery request data:', insertData);
+    logger.debug('Inserting delivery request data');
 
     const { data, error } = await supabase
       .from('delivery_requests')
@@ -195,18 +197,18 @@ export async function createDeliveryRequest(
       .single();
 
     if (error) {
-      console.error('❌ Error creating delivery request:', error);
+      logger.error('Error creating delivery request', error);
       throw error;
     }
 
-    console.log('✅ Delivery request created successfully:', data.id);
+    logger.debug('Delivery request created successfully', { id: data.id });
 
     // Notify available drivers
     await notifyDrivers(data.id);
 
     return data;
   } catch (error) {
-    console.error('Error creating delivery request:', error);
+    logger.error('Error creating delivery request', error);
     throw error;
   }
 }
@@ -242,11 +244,11 @@ export async function notifyDrivers(deliveryRequestId: string): Promise<void> {
       .gte('vehicle_capacity_kg', deliveryRequest.quantity_kg);
 
     if (!drivers || drivers.length === 0) {
-      console.log('⚠️ No available drivers found for delivery request:', deliveryRequestId);
+      logger.warn('No available drivers found for delivery request', { deliveryRequestId });
       return;
     }
 
-    console.log(`📢 Notifying ${drivers.length} drivers about new delivery request`);
+    logger.debug('Notifying drivers about new delivery request', { driverCount: drivers.length });
 
     // Create notifications for each driver (use profile_id from driver_profiles)
     const notifications = drivers.map(driver => ({
@@ -259,7 +261,7 @@ export async function notifyDrivers(deliveryRequestId: string): Promise<void> {
 
     await supabase.from('driver_notifications').insert(notifications);
   } catch (error) {
-    console.error('Error notifying drivers:', error);
+    logger.error('Error notifying drivers:', error);
   }
 }
 
@@ -277,7 +279,7 @@ export async function getPendingDeliveryRequests(): Promise<DeliveryRequest[]> {
       .order('created_at', { ascending: true });
 
     if (deliveryError) {
-      console.error('Error fetching pending delivery requests:', deliveryError);
+      logger.error('Error fetching pending delivery requests:', deliveryError);
       throw deliveryError;
     }
 
@@ -293,7 +295,7 @@ export async function getPendingDeliveryRequests(): Promise<DeliveryRequest[]> {
       .in('id', batchIds);
 
     if (batchError) {
-      console.error('Error fetching batches:', batchError);
+      logger.error('Error fetching batches:', batchError);
     }
 
     // Combine the data
@@ -306,7 +308,7 @@ export async function getPendingDeliveryRequests(): Promise<DeliveryRequest[]> {
 
     return result;
   } catch (error) {
-    console.error('Error fetching pending delivery requests:', error);
+    logger.error('Error fetching pending delivery requests:', error);
     return [];
   }
 }
@@ -346,7 +348,7 @@ export async function acceptDeliveryRequest(
       is_read: false,
     });
   } catch (error) {
-    console.error('Error accepting delivery request:', error);
+    logger.error('Error accepting delivery request:', error);
     throw error;
   }
 }
@@ -366,7 +368,7 @@ export async function startDelivery(deliveryRequestId: string): Promise<void> {
 
     if (error) throw error;
   } catch (error) {
-    console.error('Error starting delivery:', error);
+    logger.error('Error starting delivery:', error);
     throw error;
   }
 }
@@ -426,7 +428,7 @@ export async function completeDelivery(
     // Calculate and create split payments
     await calculateAndCreateSplitPayments(deliveryRequestId);
   } catch (error) {
-    console.error('Error completing delivery:', error);
+    logger.error('Error completing delivery:', error);
     throw error;
   }
 }
@@ -504,7 +506,7 @@ async function calculateAndCreateSplitPayments(deliveryRequestId: string): Promi
       .update({ payment_status: 'split_pending' })
       .eq('id', deliveryRequestId);
   } catch (error) {
-    console.error('Error calculating split payments:', error);
+    logger.error('Error calculating split payments:', error);
   }
 }
 
@@ -513,7 +515,11 @@ async function calculateAndCreateSplitPayments(deliveryRequestId: string): Promi
  */
 export async function getUserDeliveryRequests(userId: string): Promise<DeliveryRequest[]> {
   try {
-    console.log('🔍 Fetching delivery requests for user:', userId);
+    if (!userId || typeof userId !== 'string') {
+      throw new Error('Invalid user ID');
+    }
+    
+    logger.debug('Fetching delivery requests for user', { userId });
     
     // Query all delivery requests and filter in JavaScript
     // This is more reliable than JSONB queries in PostgREST
@@ -527,41 +533,37 @@ export async function getUserDeliveryRequests(userId: string): Promise<DeliveryR
       .order('created_at', { ascending: false });
 
     if (error) {
-      console.error('❌ Error fetching delivery requests:', error);
+      logger.error('Error fetching delivery requests', error);
       throw error;
     }
 
-    console.log('🔍 All delivery requests:', data?.length || 0);
+    logger.debug('Delivery requests fetched', { count: data?.length || 0 });
 
     // Filter deliveries where user is either source or destination owner
     const userDeliveries = (data || []).filter((delivery) => {
-      const sourceOwnerId = typeof delivery.source_location === 'string' 
-        ? JSON.parse(delivery.source_location)?.owner_id
-        : delivery.source_location?.owner_id;
+      const sourceLocation = typeof delivery.source_location === 'string' 
+        ? safeJsonParse<{ owner_id?: string }>(delivery.source_location, {})
+        : delivery.source_location;
+      const sourceOwnerId = sourceLocation?.owner_id;
       
-      const destOwnerId = typeof delivery.destination_location === 'string'
-        ? JSON.parse(delivery.destination_location)?.owner_id
-        : delivery.destination_location?.owner_id;
+      const destLocation = typeof delivery.destination_location === 'string'
+        ? safeJsonParse<{ owner_id?: string }>(delivery.destination_location, {})
+        : delivery.destination_location;
+      const destOwnerId = destLocation?.owner_id;
 
       const matches = sourceOwnerId === userId || destOwnerId === userId;
       
       if (matches) {
-        console.log('✅ Found matching delivery:', {
-          deliveryId: delivery.id,
-          sourceOwnerId,
-          destOwnerId,
-          userId,
-          status: delivery.status
-        });
+        logger.debug('Found matching delivery', { deliveryId: delivery.id });
       }
       
       return matches;
     });
 
-    console.log('✅ User delivery requests:', userDeliveries.length);
+    logger.debug('User delivery requests fetched', { count: userDeliveries.length });
     return userDeliveries;
   } catch (error) {
-    console.error('Error fetching user delivery requests:', error);
+    logger.error('Error fetching user delivery requests', error);
     return [];
   }
 }
@@ -580,7 +582,7 @@ export async function getDriverActiveDeliveries(driverId: string): Promise<Deliv
       .order('accepted_at', { ascending: true });
 
     if (deliveryError) {
-      console.error('Error fetching driver active deliveries:', deliveryError);
+      logger.error('Error fetching driver active deliveries:', deliveryError);
       throw deliveryError;
     }
 
@@ -596,7 +598,7 @@ export async function getDriverActiveDeliveries(driverId: string): Promise<Deliv
       .in('id', batchIds);
 
     if (batchError) {
-      console.error('Error fetching batches:', batchError);
+      logger.error('Error fetching batches:', batchError);
     }
 
     // Combine the data
@@ -609,7 +611,7 @@ export async function getDriverActiveDeliveries(driverId: string): Promise<Deliv
 
     return result;
   } catch (error) {
-    console.error('Error fetching driver active deliveries:', error);
+    logger.error('Error fetching driver active deliveries:', error);
     return [];
   }
 }
@@ -664,11 +666,11 @@ export async function findCompatibleBatches(
     let currentDestLng: number;
     
     if (typeof destLocation === 'string') {
-      try {
-        const parsed = JSON.parse(destLocation);
+      const parsed = safeJsonParse<{ lat?: number; lng?: number }>(destLocation, {});
+      if (parsed.lat !== undefined && parsed.lng !== undefined) {
         currentDestLat = parsed.lat;
         currentDestLng = parsed.lng;
-      } catch {
+      } else {
         throw new Error('Invalid destination location format');
       }
     } else {
@@ -684,7 +686,7 @@ export async function findCompatibleBatches(
       .neq('id', deliveryRequestId);
 
     if (compatibleError) {
-      console.error('Error finding compatible batches:', compatibleError);
+      logger.error('Error finding compatible batches:', compatibleError);
       return [];
     }
 
@@ -697,11 +699,11 @@ export async function findCompatibleBatches(
         let deliveryLng: number;
         
         if (typeof deliveryDest === 'string') {
-          try {
-            const parsed = JSON.parse(deliveryDest);
+          const parsed = safeJsonParse<{ lat?: number; lng?: number }>(deliveryDest, {});
+          if (parsed.lat !== undefined && parsed.lng !== undefined) {
             deliveryLat = parsed.lat;
             deliveryLng = parsed.lng;
-          } catch {
+          } else {
             return false; // Skip invalid destinations
           }
         } else {
@@ -748,7 +750,7 @@ export async function findCompatibleBatches(
 
     return compatible;
   } catch (error) {
-    console.error('Error finding compatible batches:', error);
+    logger.error('Error finding compatible batches:', error);
     return [];
   }
 }
@@ -798,25 +800,28 @@ export async function addBatchToDelivery(
     }
 
     // Compare coordinates (more reliable than JSON string comparison)
-    const currentLat = typeof currentDest === 'string' 
-      ? JSON.parse(currentDest).lat 
-      : currentDest.lat;
-    const currentLng = typeof currentDest === 'string' 
-      ? JSON.parse(currentDest).lng 
-      : currentDest.lng;
-    const batchLat = typeof batchDest === 'string' 
-      ? JSON.parse(batchDest).lat 
-      : batchDest.lat;
-    const batchLng = typeof batchDest === 'string' 
-      ? JSON.parse(batchDest).lng 
-      : batchDest.lng;
+    const currentLocation = typeof currentDest === 'string' 
+      ? safeJsonParse<{ lat?: number; lng?: number }>(currentDest, {})
+      : currentDest;
+    const batchLocation = typeof batchDest === 'string' 
+      ? safeJsonParse<{ lat?: number; lng?: number }>(batchDest, {})
+      : batchDest;
+      
+    if (!currentLocation?.lat || !currentLocation?.lng || !batchLocation?.lat || !batchLocation?.lng) {
+      return false;
+    }
+    
+    const currentLat = currentLocation.lat;
+    const currentLng = currentLocation.lng;
+    const batchLat = batchLocation.lat;
+    const batchLng = batchLocation.lng;
 
     // Allow small tolerance for floating point comparison (0.001 degrees ≈ 111 meters)
     const latDiff = Math.abs(currentLat - batchLat);
     const lngDiff = Math.abs(currentLng - batchLng);
     
     if (latDiff > 0.001 || lngDiff > 0.001) {
-      console.error('Destination mismatch:', {
+      logger.error('Destination mismatch:', {
         current: { lat: currentLat, lng: currentLng },
         batch: { lat: batchLat, lng: batchLng },
         diff: { lat: latDiff, lng: lngDiff }
@@ -891,7 +896,7 @@ export async function addBatchToDelivery(
       .eq('id', batchDeliveryId);
 
     if (updateBatchDeliveryError) {
-      console.warn('Could not update batch delivery status:', updateBatchDeliveryError);
+      logger.warn('Could not update batch delivery status:', updateBatchDeliveryError);
     }
 
     // Update owner contribution percentages for all batches
@@ -927,7 +932,7 @@ export async function addBatchToDelivery(
       is_read: false,
     });
   } catch (error) {
-    console.error('Error adding batch to delivery:', error);
+    logger.error('Error adding batch to delivery:', error);
     throw error;
   }
 }
@@ -999,7 +1004,7 @@ export async function getDeliveryBatches(deliveryRequestId: string): Promise<any
       });
     }
 
-    console.log('📦 Delivery batches loaded:', {
+    logger.debug('📦 Delivery batches loaded:', {
       deliveryId: deliveryRequestId,
       mainBatch: delivery.batch_id,
       additionalBatchesCount: additionalBatches?.length || 0,
@@ -1012,7 +1017,7 @@ export async function getDeliveryBatches(deliveryRequestId: string): Promise<any
     // Ensure we return all batches even if some data is missing
     return result.filter(b => b.batch_id); // Filter out any null/undefined batches
   } catch (error) {
-    console.error('Error getting delivery batches:', error);
+    logger.error('Error getting delivery batches:', error);
     return [];
   }
 }
@@ -1052,7 +1057,7 @@ export async function getDeliveryCapacityInfo(
 
     return { used, available, percentage };
   } catch (error) {
-    console.error('Error getting delivery capacity:', error);
+    logger.error('Error getting delivery capacity:', error);
     return { used: 0, available: driverCapacity, percentage: 0 };
   }
 }
@@ -1072,7 +1077,7 @@ export async function getDriverDeliveryHistory(driverId: string): Promise<Delive
       .limit(50);
 
     if (deliveryError) {
-      console.error('Error fetching driver delivery history:', deliveryError);
+      logger.error('Error fetching driver delivery history:', deliveryError);
       throw deliveryError;
     }
 
@@ -1088,7 +1093,7 @@ export async function getDriverDeliveryHistory(driverId: string): Promise<Delive
       .in('id', batchIds);
 
     if (batchError) {
-      console.error('Error fetching batches:', batchError);
+      logger.error('Error fetching batches:', batchError);
     }
 
     // Combine the data
@@ -1101,7 +1106,7 @@ export async function getDriverDeliveryHistory(driverId: string): Promise<Delive
 
     return result;
   } catch (error) {
-    console.error('Error fetching driver delivery history:', error);
+    logger.error('Error fetching driver delivery history:', error);
     return [];
   }
 }

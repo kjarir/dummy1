@@ -1,5 +1,7 @@
 import jsPDF from 'jspdf';
-import { singleStepGroupManager } from '@/features/ipfs/utils/singleStepGroupManager';
+import { ipfsManager } from '@/features/ipfs/utils/ipfsManager';
+import { logger } from '@/lib/logger';
+import { sanitizeError, sanitizeString } from '@/lib/security';
 
 /**
  * Group Certificate Generator
@@ -34,37 +36,34 @@ export class GroupCertificateGenerator {
     }
   ): Promise<{ pdfBlob: Blob; groupId: string }> {
     try {
-      // Create group for this batch
-      const groupName = `${batchData.farmerName}_${batchData.cropType}_${batchData.variety}`.replace(/[^a-zA-Z0-9]/g, '_').toLowerCase();
-      const groupId = await singleStepGroupManager.createGroup(groupName);
+      // Validate inputs
+      const sanitizedBatchId = sanitizeString(batchData.batchId, 100);
+      const sanitizedFarmerName = sanitizeString(batchData.farmerName, 255);
+      const sanitizedCropType = sanitizeString(batchData.cropType, 100);
+      const sanitizedVariety = sanitizeString(batchData.variety, 100);
 
-      // Generate PDF
-      const pdfBlob = await this.createHarvestPDF(batchData, groupId);
+      if (!sanitizedBatchId || !sanitizedFarmerName || !sanitizedCropType || !sanitizedVariety) {
+        throw new Error('Invalid batch data: required fields missing or invalid');
+      }
 
-      // Upload to group
-      const fileName = `harvest_certificate_${batchData.batchId}_${Date.now()}.pdf`;
-      const metadata = {
-        keyvalues: {
-          batchId: batchData.batchId,
-          transactionType: 'HARVEST',
-          from: 'Farm',
-          to: batchData.farmerName,
-          quantity: batchData.harvestQuantity.toString(),
-          price: (batchData.harvestQuantity * batchData.pricePerKg).toString(),
-          timestamp: new Date().toISOString(),
-          cropType: batchData.cropType,
-          variety: batchData.variety,
-          type: 'certificate',
-          groupId: groupId
-        }
-      };
-      const ipfsHash = await singleStepGroupManager.uploadFileToGroup(groupId, pdfBlob, fileName, metadata);
+      // Create group for this batch using ipfsManager's method
+      const result = await ipfsManager.uploadHarvestCertificate({
+        batchId: sanitizedBatchId,
+        farmerName: sanitizedFarmerName,
+        cropType: sanitizedCropType,
+        variety: sanitizedVariety,
+        harvestQuantity: batchData.harvestQuantity,
+        harvestDate: batchData.harvestDate,
+        grading: sanitizeString(batchData.grading, 100) || 'Standard',
+        certification: sanitizeString(batchData.certification, 100) || 'Standard',
+        pricePerKg: batchData.pricePerKg
+      });
 
-      console.log(`Generated harvest certificate for batch ${batchData.batchId}, Group ID: ${groupId}`);
-      return { pdfBlob, groupId };
+      logger.debug('Generated harvest certificate', { batchId: sanitizedBatchId, groupId: result.groupId });
+      return { pdfBlob: result.pdfBlob, groupId: result.groupId };
     } catch (error) {
-      console.error('Error generating harvest certificate:', error);
-      throw new Error('Failed to generate harvest certificate');
+      logger.error('Error generating harvest certificate', error);
+      throw new Error(sanitizeError(error));
     }
   }
 
@@ -108,13 +107,27 @@ export class GroupCertificateGenerator {
           groupId: groupId
         }
       };
-      const ipfsHash = await singleStepGroupManager.uploadFileToGroup(groupId, pdfBlob, fileName, metadata);
+      const sanitizedGroupId = sanitizeString(groupId, 100);
+      if (!sanitizedGroupId) {
+        throw new Error('Invalid group ID');
+      }
 
-      console.log(`Generated purchase certificate for batch ${purchaseData.batchId}, Group ID: ${groupId}`);
-      return { pdfBlob, ipfsHash };
+      const result = await ipfsManager.uploadPurchaseCertificate(sanitizedGroupId, {
+        batchId: sanitizeString(purchaseData.batchId, 100),
+        from: sanitizeString(purchaseData.from, 255),
+        to: sanitizeString(purchaseData.to, 255),
+        quantity: purchaseData.quantity,
+        pricePerKg: purchaseData.unitPrice,
+        timestamp: new Date().toISOString(),
+        sellerName: sanitizeString(purchaseData.from, 255),
+        buyerName: sanitizeString(purchaseData.to, 255)
+      });
+
+      logger.debug('Generated purchase certificate', { batchId: purchaseData.batchId, groupId: sanitizedGroupId });
+      return { pdfBlob: result.pdfBlob, ipfsHash: result.ipfsHash };
     } catch (error) {
-      console.error('Error generating purchase certificate:', error);
-      throw new Error('Failed to generate purchase certificate');
+      logger.error('Error generating purchase certificate', error);
+      throw new Error(sanitizeError(error));
     }
   }
 
@@ -256,7 +269,7 @@ export class GroupCertificateGenerator {
     doc.setFont('helvetica', 'bold');
     doc.text('Verification URL:', 35, yPosition);
     doc.setFont('helvetica', 'normal');
-    doc.text(singleStepGroupManager.getGroupVerificationUrl(groupId), 35, yPosition + 4);
+    doc.text(ipfsManager.getCertificateUrl(groupId), 35, yPosition + 4);
     yPosition += 12;
     
     // Official declaration
@@ -441,7 +454,7 @@ export class GroupCertificateGenerator {
     doc.setFont('helvetica', 'bold');
     doc.text('Verification URL:', 35, yPosition);
     doc.setFont('helvetica', 'normal');
-    doc.text(singleStepGroupManager.getGroupVerificationUrl(groupId), 35, yPosition + 4);
+    doc.text(ipfsManager.getCertificateUrl(groupId), 35, yPosition + 4);
     yPosition += 12;
     
     // Official declaration

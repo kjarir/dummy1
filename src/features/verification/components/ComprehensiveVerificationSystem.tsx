@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { logger } from '@/lib/logger';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -113,7 +114,7 @@ export const ComprehensiveVerificationSystem: React.FC<ComprehensiveVerification
       }
 
     } catch (error) {
-      console.error('Error verifying QR code:', error);
+      logger.error('Error verifying QR code:', error);
       setVerificationResult({
         isValid: false,
         type: 'verification',
@@ -361,7 +362,7 @@ export const ComprehensiveVerificationSystem: React.FC<ComprehensiveVerification
         setTransactionHistory(transactions);
       }
     } catch (error) {
-      console.error('Error fetching batch details:', error);
+      logger.error('Error fetching batch details:', error);
     }
   };
 

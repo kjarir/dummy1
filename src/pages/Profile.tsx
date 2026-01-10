@@ -1,6 +1,9 @@
 import { useState, useEffect } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
+import { Tables } from '@/integrations/supabase/types';
+import { logger } from '@/lib/logger';
+import { sanitizeError, sanitizeString } from '@/lib/security';
 import { 
   User, 
   Mail, 
@@ -39,7 +42,7 @@ import { analyzeCropHealth, type CropHealthAnalysis } from '@/features/ai-servic
 export const Profile = () => {
   const { user } = useAuth();
   const [isEditing, setIsEditing] = useState(false);
-  const [profile, setProfile] = useState<any>(null);
+  const [profile, setProfile] = useState<Tables<'profiles'> | null>(null);
   const [loading, setLoading] = useState(true);
   const [formData, setFormData] = useState({
     fullName: '',
@@ -65,11 +68,11 @@ export const Profile = () => {
 
   const fetchProfile = async () => {
     try {
-      const { data, error } = await (supabase as any)
+      const { data, error } = await supabase
         .from('profiles')
         .select('*')
-        .eq('user_id', user?.id)
-        .single();
+        .eq('user_id', user?.id || '')
+        .single<Tables<'profiles'>>();
 
       if (error) throw error;
       setProfile(data);
@@ -81,7 +84,7 @@ export const Profile = () => {
         bio: ''
       });
     } catch (error) {
-      console.error('Error fetching profile:', error);
+      logger.error('Error fetching profile', error);
     } finally {
       setLoading(false);
     }
@@ -136,7 +139,7 @@ export const Profile = () => {
         description: "Your profile has been successfully updated.",
       });
     } catch (error) {
-      console.error('Error updating profile:', error);
+      logger.error('Error updating profile', error);
       toast({
         variant: "destructive",
         title: "Update failed",

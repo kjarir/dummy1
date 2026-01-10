@@ -6,7 +6,9 @@ import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
 import { useToast } from '@/components/ui/use-toast';
-import { singleStepGroupManager } from '@/features/ipfs/utils/singleStepGroupManager';
+import { ipfsManager } from '@/features/ipfs/utils/ipfsManager';
+import { logger } from '@/lib/logger';
+import { sanitizeError, sanitizeString } from '@/lib/security';
 import { 
   Search, 
   Download, 
@@ -21,19 +23,44 @@ import {
   ExternalLink
 } from 'lucide-react';
 
+interface GroupCertificate {
+  id: string;
+  ipfs_pin_hash?: string;
+  ipfs_hash?: string;
+  file_name?: string;
+  created_at?: string;
+  date_pinned?: string;
+  metadata?: {
+    keyvalues?: {
+      timestamp?: string;
+      [key: string]: unknown;
+    };
+    [key: string]: unknown;
+  };
+  transaction_type?: string;
+  [key: string]: unknown;
+}
+
+interface GroupInfo {
+  id: string;
+  name: string;
+  [key: string]: unknown;
+}
+
 export const GroupVerificationSystem: React.FC = () => {
   const [groupId, setGroupId] = useState('');
   const [loading, setLoading] = useState(false);
-  const [certificates, setCertificates] = useState<any[]>([]);
-  const [groupInfo, setGroupInfo] = useState<any>(null);
+  const [certificates, setCertificates] = useState<GroupCertificate[]>([]);
+  const [groupInfo, setGroupInfo] = useState<GroupInfo | null>(null);
   const { toast } = useToast();
 
   const handleSearch = async () => {
-    if (!groupId.trim()) {
+    const sanitizedGroupId = sanitizeString(groupId.trim(), 100);
+    if (!sanitizedGroupId) {
       toast({
         variant: "destructive",
         title: "Group ID Required",
-        description: "Please enter a Group ID to search.",
+        description: "Please enter a valid Group ID to search.",
       });
       return;
     }
@@ -44,16 +71,31 @@ export const GroupVerificationSystem: React.FC = () => {
 
     try {
       // Get group information
-      const info = await singleStepGroupManager.getGroupInfo(groupId);
-      setGroupInfo(info);
+      const info = await ipfsManager.getGroupInfo(sanitizedGroupId);
+      if (info) {
+        setGroupInfo({
+          id: info.id || sanitizedGroupId,
+          name: info.name || 'Unknown'
+        });
+      }
 
       // Get all certificates in the group
-      const certs = await singleStepGroupManager.getGroupCertificates(groupId);
+      const certs = await ipfsManager.getGroupCertificates(sanitizedGroupId);
       
-      // Sort certificates by timestamp
-      const sortedCerts = certs.sort((a, b) => {
-        const timestampA = a.metadata?.keyvalues?.timestamp || a.date_pinned;
-        const timestampB = b.metadata?.keyvalues?.timestamp || b.date_pinned;
+      // Transform to expected format and sort by timestamp
+      const transformedCerts: GroupCertificate[] = certs.map((cert) => ({
+        id: cert.id || '',
+        ipfs_pin_hash: cert.ipfs_hash,
+        ipfs_hash: cert.ipfs_hash,
+        file_name: cert.file_name || 'Unknown',
+        created_at: cert.created_at || new Date().toISOString(),
+        metadata: cert.metadata ? (typeof cert.metadata === 'string' ? JSON.parse(cert.metadata) : cert.metadata) : undefined,
+        transaction_type: cert.transaction_type || 'UNKNOWN'
+      }));
+      
+      const sortedCerts = transformedCerts.sort((a, b) => {
+        const timestampA = a.metadata?.keyvalues?.timestamp || a.created_at || a.date_pinned || '';
+        const timestampB = b.metadata?.keyvalues?.timestamp || b.created_at || b.date_pinned || '';
         return new Date(timestampA).getTime() - new Date(timestampB).getTime();
       });
       
@@ -61,14 +103,14 @@ export const GroupVerificationSystem: React.FC = () => {
       
       toast({
         title: "Group Found",
-        description: `Found ${sortedCerts.length} certificates in group ${groupId}.`,
+        description: `Found ${sortedCerts.length} certificate(s) in group.`,
       });
     } catch (error) {
-      console.error('Search error:', error);
+      logger.error('Search error', error);
       toast({
         variant: "destructive",
         title: "Search Failed",
-        description: error instanceof Error ? error.message : "Failed to search. Please try again.",
+        description: error instanceof Error ? sanitizeError(error) : "Failed to search. Please try again.",
       });
     } finally {
       setLoading(false);
@@ -76,14 +118,24 @@ export const GroupVerificationSystem: React.FC = () => {
   };
 
   const handleDownloadCertificate = (ipfsHash: string, fileName: string) => {
-    const url = singleStepGroupManager.getCertificateUrl(ipfsHash);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = fileName;
-    link.target = '_blank';
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+    try {
+      const url = ipfsManager.getCertificateUrl(ipfsHash);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = sanitizeString(fileName, 255) || 'certificate.pdf';
+      link.target = '_blank';
+      link.rel = 'noopener noreferrer';
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    } catch (error) {
+      logger.error('Error downloading certificate', error);
+      toast({
+        variant: "destructive",
+        title: "Download Failed",
+        description: "Failed to download certificate. Please try again.",
+      });
+    }
   };
 
   const formatTimestamp = (timestamp: string) => {
@@ -273,7 +325,19 @@ export const GroupVerificationSystem: React.FC = () => {
                     <Button 
                       variant="outline" 
                       size="sm"
-                      onClick={() => window.open(singleStepGroupManager.getCertificateUrl(cert.ipfs_pin_hash), '_blank')}
+                      onClick={() => {
+                        try {
+                          const url = ipfsManager.getCertificateUrl(cert.ipfs_pin_hash || cert.ipfs_hash || '');
+                          window.open(url, '_blank', 'noopener,noreferrer');
+                        } catch (error) {
+                          logger.error('Error opening certificate URL', error);
+                          toast({
+                            variant: "destructive",
+                            title: "Error",
+                            description: "Failed to open certificate.",
+                          });
+                        }
+                      }}
                     >
                       <ExternalLink className="h-4 w-4 mr-2" />
                       View Online

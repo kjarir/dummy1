@@ -1,4 +1,5 @@
 import { supabase } from '@/integrations/supabase/client';
+import { logger } from '@/lib/logger';
 
 /**
  * Safely query batches table with fallback approaches
@@ -19,7 +20,7 @@ export const findBatchById = async (batchId: string | number): Promise<any | nul
     // If not found, return null
     return null;
   } catch (error) {
-    console.error('Error finding batch by ID:', error);
+    logger.error('Error finding batch by ID:', error);
     return null;
   }
 };
@@ -41,7 +42,7 @@ export const findBatchByField = async (field: string, value: any): Promise<any |
 
     return null;
   } catch (error) {
-    console.error(`Error finding batch by ${field}:`, error);
+    logger.error(`Error finding batch by ${field}:`, error);
     return null;
   }
 };
@@ -56,13 +57,13 @@ export const getAllBatches = async (): Promise<any[]> => {
       .select('*');
 
     if (error) {
-      console.error('Error fetching batches:', error);
+      logger.error('Error fetching batches:', error);
       return [];
     }
 
     return data || [];
   } catch (error) {
-    console.error('Error fetching batches:', error);
+    logger.error('Error fetching batches:', error);
     return [];
   }
 };
@@ -80,13 +81,13 @@ export const updateBatch = async (batchId: string | number, updates: any): Promi
       .single();
 
     if (error) {
-      console.error('Error updating batch:', error);
+      logger.error('Error updating batch:', error);
       return null;
     }
 
     return data;
   } catch (error) {
-    console.error('Error updating batch:', error);
+    logger.error('Error updating batch:', error);
     return null;
   }
 };
@@ -121,7 +122,7 @@ export const parseBuyerInfo = (grading: string): any => {
 
     return buyerInfo;
   } catch (error) {
-    console.error('Error parsing buyer info:', error);
+    logger.error('Error parsing buyer info:', error);
     return null;
   }
 };

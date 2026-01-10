@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { logger } from '@/lib/logger';
 import { useAuth } from '@/contexts/AuthContext';
 import { supabase } from '@/integrations/supabase/client';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
@@ -59,7 +60,7 @@ export const RetailerMarketplace = () => {
   const fetchDistributorBatches = async () => {
     try {
       setLoading(true);
-      console.log(`🔍 DEBUG: Fetching batches available in distributor-retailer marketplace...`);
+      logger.debug(`🔍 DEBUG: Fetching batches available in distributor-retailer marketplace...`);
       
       // Get batches that are available in distributor-retailer marketplace
       const { data, error } = await supabase
@@ -75,29 +76,29 @@ export const RetailerMarketplace = () => {
         .limit(20);
 
       if (error) {
-        console.error('Database error:', error);
+        logger.error('Database error:', error);
         setBatches([]);
         return;
       }
 
-      console.log(`Found ${data?.length || 0} batches in distributor-retailer marketplace:`, data);
+      logger.debug(`Found ${data?.length || 0} batches in distributor-retailer marketplace:`, data);
 
       // Extract batch data and filter for distributor-owned batches
       let distributorBatches = data?.map(item => item.batches).filter(batch => {
         // Only show batches owned by distributors (not farmers)
         const isDistributorOwned = batch.current_owner && batch.current_owner !== batch.farmer_id;
-        console.log(`🔍 DEBUG: Batch ${batch.id} - current_owner: ${batch.current_owner}, farmer_id: ${batch.farmer_id}, isDistributorOwned: ${isDistributorOwned}`);
+        logger.debug(`🔍 DEBUG: Batch ${batch.id} - current_owner: ${batch.current_owner}, farmer_id: ${batch.farmer_id}, isDistributorOwned: ${isDistributorOwned}`);
         return isDistributorOwned;
       }) || [];
       
-      console.log(`🔍 DEBUG: Found ${distributorBatches.length} distributor-owned batches after filtering`);
+      logger.debug(`🔍 DEBUG: Found ${distributorBatches.length} distributor-owned batches after filtering`);
       
       // If user is a distributor, also filter out their own products from the marketplace
       if (userType === 'distributor') {
         distributorBatches = distributorBatches.filter(batch => batch.current_owner !== user?.id);
       }
 
-      console.log(`Found ${distributorBatches.length} distributor-owned batches for retailer marketplace`);
+      logger.debug(`Found ${distributorBatches.length} distributor-owned batches for retailer marketplace`);
 
       // Get profiles for the current owners (distributors)
       if (distributorBatches.length > 0) {
@@ -118,7 +119,7 @@ export const RetailerMarketplace = () => {
         setBatches([]);
       }
     } catch (error) {
-      console.error('Error fetching distributor batches:', error);
+      logger.error('Error fetching distributor batches:', error);
       setBatches([]);
     } finally {
       setLoading(false);
