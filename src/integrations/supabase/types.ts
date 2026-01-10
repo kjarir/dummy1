@@ -7,14 +7,172 @@ export type Json =
   | Json[]
 
 export type Database = {
-  // Allows to automatically instantiate createClient with right options
-  // instead of createClient<Database, { PostgrestVersion: 'XX' }>(URL, KEY)
   __InternalSupabase: {
     PostgrestVersion: "13.0.5"
   }
   public: {
     Tables: {
-      [_ in never]: never
+      batches: {
+        Row: {
+          id: string
+          group_id: string | null
+          farmer_id: string | null
+          user_id: string | null
+          crop_type: string | null
+          variety: string | null
+          grading: string | null
+          harvest_date: string | null
+          created_at: string | null
+        }
+        Insert: {
+          id?: string
+          group_id?: string | null
+          farmer_id?: string | null
+          user_id?: string | null
+          crop_type?: string | null
+          variety?: string | null
+          grading?: string | null
+          harvest_date?: string | null
+          created_at?: string | null
+        }
+        Update: {
+          id?: string
+          group_id?: string | null
+          farmer_id?: string | null
+          user_id?: string | null
+          crop_type?: string | null
+          variety?: string | null
+          grading?: string | null
+          harvest_date?: string | null
+          created_at?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "batches_farmer_id_fkey"
+            columns: ["farmer_id"]
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "batches_user_id_fkey"
+            columns: ["user_id"]
+            referencedRelation: "profiles"
+            referencedColumns: ["user_id"]
+          }
+        ]
+      }
+      group_files: {
+        Row: {
+          id: string
+          batch_id: string | null
+          group_id: string | null
+          transaction_type: string | null
+          metadata: Json | string | null
+          ipfs_hash: string | null
+          created_at: string | null
+        }
+        Insert: {
+          id?: string
+          batch_id?: string | null
+          group_id?: string | null
+          transaction_type?: string | null
+          metadata?: Json | string | null
+          ipfs_hash?: string | null
+          created_at?: string | null
+        }
+        Update: {
+          id?: string
+          batch_id?: string | null
+          group_id?: string | null
+          transaction_type?: string | null
+          metadata?: Json | string | null
+          ipfs_hash?: string | null
+          created_at?: string | null
+        }
+        Relationships: []
+      }
+      profiles: {
+        Row: {
+          id: string
+          user_id: string | null
+          full_name: string | null
+          email: string | null
+          user_type: string | null
+          farm_location: string | null
+        }
+        Insert: {
+          id?: string
+          user_id?: string | null
+          full_name?: string | null
+          email?: string | null
+          user_type?: string | null
+          farm_location?: string | null
+        }
+        Update: {
+          id?: string
+          user_id?: string | null
+          full_name?: string | null
+          email?: string | null
+          user_type?: string | null
+          farm_location?: string | null
+        }
+        Relationships: []
+      }
+      transactions: {
+        Row: {
+          transaction_id: string
+          batch_id: string | null
+          type: string | null
+          from_address: string | null
+          to_address: string | null
+          quantity: number | null
+          price: number | null
+          transaction_timestamp: string | null
+          previous_transaction_hash: string | null
+          ipfs_hash: string | null
+          product_details: Json | null
+          metadata: Json | null
+          blockchain_hash: string | null
+        }
+        Insert: {
+          transaction_id: string
+          batch_id?: string | null
+          type?: string | null
+          from_address?: string | null
+          to_address?: string | null
+          quantity?: number | null
+          price?: number | null
+          transaction_timestamp?: string | null
+          previous_transaction_hash?: string | null
+          ipfs_hash?: string | null
+          product_details?: Json | null
+          metadata?: Json | null
+          blockchain_hash?: string | null
+        }
+        Update: {
+          transaction_id?: string
+          batch_id?: string | null
+          type?: string | null
+          from_address?: string | null
+          to_address?: string | null
+          quantity?: number | null
+          price?: number | null
+          transaction_timestamp?: string | null
+          previous_transaction_hash?: string | null
+          ipfs_hash?: string | null
+          product_details?: Json | null
+          metadata?: Json | null
+          blockchain_hash?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "transactions_batch_id_fkey"
+            columns: ["batch_id"]
+            referencedRelation: "batches"
+            referencedColumns: ["id"]
+          }
+        ]
+      }
     }
     Views: {
       [_ in never]: never
@@ -32,7 +190,6 @@ export type Database = {
 }
 
 type DatabaseWithoutInternals = Omit<Database, "__InternalSupabase">
-
 type DefaultSchema = DatabaseWithoutInternals[Extract<keyof Database, "public">]
 
 export type Tables<

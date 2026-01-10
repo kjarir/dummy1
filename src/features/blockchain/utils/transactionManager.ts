@@ -1,8 +1,18 @@
 import { supabase } from '@/integrations/supabase/client';
+import { Tables } from '@/integrations/supabase/types';
 import { ipfsService } from '@/features/ipfs/utils/ipfs';
 import { SupplyChainTransaction, TransactionChain, OwnershipRecord } from '@/types/transaction';
 import { nameResolver } from '@/features/blockchain/utils/nameResolver';
 import { blockchainTransactionManager } from './blockchainTransactionManager';
+
+type TransactionRow = Tables<'transactions'>;
+type BatchRow = Tables<'batches'>;
+type ProfileRow = Tables<'profiles'>;
+type GroupFileRow = Tables<'group_files'>;
+
+type BatchWithProfile = BatchRow & {
+  profiles?: Pick<ProfileRow, 'full_name' | 'farm_location'> | null;
+};
 
 /**
  * Immutable Transaction Manager
@@ -25,7 +35,7 @@ export class TransactionManager {
   /**
    * Clean up transaction data to fix existing issues
    */
-  private cleanTransactionData(transaction: any, farmerName?: string): any {
+  private cleanTransactionData(transaction: SupplyChainTransaction, farmerName?: string): SupplyChainTransaction {
     let from = transaction.from;
     let to = transaction.to;
     
@@ -45,12 +55,10 @@ export class TransactionManager {
       // If "from" is "Farm Location", replace with actual farmer name
       if (from === 'Farm Location' && farmerName) {
         from = farmerName;
-        console.log('🔍 DEBUG: Fixed harvest transaction from Farm Location to:', farmerName);
       }
       // If "to" is "Farm Location", replace with actual farmer name
       if (to === 'Farm Location' && farmerName) {
         to = farmerName;
-        console.log('🔍 DEBUG: Fixed harvest transaction to Farm Location to:', farmerName);
       }
     }
     
@@ -120,7 +128,7 @@ export class TransactionManager {
       // Store transaction in database
       await this.storeTransactionInDatabase(transaction);
 
-      console.log(`Created transaction ${transactionId} with IPFS hash: ${transaction.ipfsHash}`);
+      // Created transaction persisted with IPFS hash
       return transaction;
     } catch (error) {
       console.error('Error creating transaction:', error);
@@ -133,7 +141,7 @@ export class TransactionManager {
    */
   private async storeTransactionInDatabase(transaction: SupplyChainTransaction): Promise<void> {
     try {
-      const { error } = await (supabase as any)
+      const { error } = await supabase
         .from('transactions')
         .insert({
           transaction_id: transaction.transactionId,
@@ -144,11 +152,11 @@ export class TransactionManager {
           quantity: transaction.quantity,
           price: transaction.price,
           transaction_timestamp: transaction.timestamp,
-          previous_transaction_hash: transaction.previousTransactionHash,
+          previous_transaction_hash: transaction.previousTransactionHash ?? null,
           ipfs_hash: transaction.ipfsHash,
           product_details: transaction.productDetails,
-          metadata: transaction.metadata
-        });
+          metadata: transaction.metadata ?? null,
+        } satisfies Tables<'transactions'>);
 
       if (error) {
         if (error.code === 'PGRST116') {
@@ -167,7 +175,7 @@ export class TransactionManager {
    */
   public async getTransaction(transactionId: string): Promise<SupplyChainTransaction | null> {
     try {
-      const { data, error } = await (supabase as any)
+      const { data, error } = await supabase
         .from('transactions')
         .select('*')
         .eq('transaction_id', transactionId)
@@ -177,7 +185,7 @@ export class TransactionManager {
         return null;
       }
 
-      return this.mapDatabaseToTransaction(data);
+      return this.mapDatabaseToTransaction(data as TransactionRow);
     } catch (error) {
       console.error('Error getting transaction:', error);
       return null;
@@ -189,7 +197,7 @@ export class TransactionManager {
    */
   public async getTransactionByIPFSHash(ipfsHash: string): Promise<SupplyChainTransaction | null> {
     try {
-      const { data, error } = await (supabase as any)
+      const { data, error } = await supabase
         .from('transactions')
         .select('*')
         .eq('ipfs_hash', ipfsHash)
@@ -199,7 +207,7 @@ export class TransactionManager {
         return null;
       }
 
-      return this.mapDatabaseToTransaction(data);
+      return this.mapDatabaseToTransaction(data as TransactionRow);
     } catch (error) {
       console.error('Error getting transaction by IPFS hash:', error);
       return null;
@@ -211,10 +219,8 @@ export class TransactionManager {
    */
   public async getBatchTransactions(batchId: string): Promise<SupplyChainTransaction[]> {
     try {
-      console.log('Getting batch transactions for batch:', batchId);
-      
       // First, get the batch data to find the group_id
-      const { data: batch, error: batchError } = await (supabase as any)
+      const { data: batchData, error: batchError } = await supabase
         .from('batches')
         .select(`
           *,
@@ -226,23 +232,23 @@ export class TransactionManager {
         .eq('id', batchId)
         .single();
 
-      if (batchError || !batch) {
+      if (batchError || !batchData) {
         console.warn('Batch not found:', batchId);
         return [];
       }
 
+      const batch = batchData as BatchWithProfile;
+
       // If batch has a group_id, get files from group_files table
       if (batch.group_id) {
         // Fetch ALL transaction types from group_files
-        const { data: groupFiles, error: groupError } = await (supabase as any)
+        const { data: groupFiles, error: groupError } = await supabase
           .from('group_files')
           .select('*')
           .eq('group_id', batch.group_id)
           .in('transaction_type', ['HARVEST', 'PURCHASE', 'RETAIL', 'TRANSFER'])
           .order('created_at', { ascending: true });
         
-        console.log('🔍 DEBUG: Fetched group_files:', groupFiles?.length, 'files');
-        console.log('🔍 DEBUG: Group files transaction types:', groupFiles?.map((f: any) => f.transaction_type));
 
         if (groupError) {
           console.error('Error fetching group files:', groupError);
@@ -254,17 +260,12 @@ export class TransactionManager {
         
         // Get farmer name from batch data - make it truly dynamic
         let farmerName = null;
-        console.log('🔍 DEBUG: Batch data:', batch);
-        console.log('🔍 DEBUG: Batch profiles:', batch.profiles);
-        console.log('🔍 DEBUG: Batch farmer_id:', batch.farmer_id);
-        
         if (batch.profiles?.full_name) {
           farmerName = batch.profiles.full_name;
-          console.log('🔍 DEBUG: Using farmer name from batch.profiles:', farmerName);
         } else if (batch.farmer_id) {
           // Try to get farmer name from profiles table
           try {
-            const { data: farmerProfile } = await (supabase as any)
+            const { data: farmerProfile } = await supabase
               .from('profiles')
               .select('full_name')
               .eq('id', batch.farmer_id)
@@ -272,7 +273,6 @@ export class TransactionManager {
             
             if (farmerProfile?.full_name) {
               farmerName = farmerProfile.full_name;
-              console.log('🔍 DEBUG: Using farmer name from profiles table:', farmerName);
             }
           } catch (error) {
             console.warn('Could not fetch farmer profile:', error);
@@ -282,7 +282,7 @@ export class TransactionManager {
         // If still no farmer name found, try to get from user_id
         if (!farmerName && batch.user_id) {
           try {
-            const { data: userProfile } = await (supabase as any)
+            const { data: userProfile } = await supabase
               .from('profiles')
               .select('full_name')
               .eq('user_id', batch.user_id)
@@ -290,14 +290,11 @@ export class TransactionManager {
             
             if (userProfile?.full_name) {
               farmerName = userProfile.full_name;
-              console.log('🔍 DEBUG: Using farmer name from user_id:', farmerName);
             }
           } catch (error) {
             console.warn('Could not fetch user profile:', error);
           }
         }
-        
-        console.log('🔍 DEBUG: Final farmer name:', farmerName);
         
         for (const file of groupFiles || []) {
           // Parse metadata if it's a string
@@ -325,7 +322,6 @@ export class TransactionManager {
             // For harvest transactions: Farmer harvests and owns the crop
             fromName = storedFarmerName || farmerName || await nameResolver.resolveName(fromIdentifier || 'Unknown Farmer');
             toName = storedFarmerName || farmerName || await nameResolver.resolveName(toIdentifier || 'Unknown Farmer');
-            console.log('🔍 DEBUG: HARVEST transaction - fromName:', fromName, 'toName:', toName);
           } else if (file.transaction_type === 'PURCHASE' || file.transaction_type === 'RETAIL') {
             // For purchase/retail transactions: Get actual seller and buyer names
             // IMPORTANT: fromIdentifier/toIdentifier might be profile IDs (UUIDs), resolve them
@@ -334,7 +330,7 @@ export class TransactionManager {
             // Resolve seller (from) - could be farmer or distributor
             if (uuidRegex.test(fromIdentifier)) {
               try {
-                const { data: fromProfile } = await (supabase as any)
+                const { data: fromProfile } = await supabase
                   .from('profiles')
                   .select('full_name, user_type')
                   .eq('id', fromIdentifier)
@@ -363,7 +359,7 @@ export class TransactionManager {
             // Resolve buyer (to) - could be distributor or retailer
             if (uuidRegex.test(toIdentifier)) {
               try {
-                const { data: toProfile } = await (supabase as any)
+                const { data: toProfile } = await supabase
                   .from('profiles')
                   .select('full_name, user_type')
                   .eq('id', toIdentifier)
@@ -388,16 +384,10 @@ export class TransactionManager {
             } else {
               toName = storedBuyerName || await nameResolver.resolveName(toIdentifier || 'Unknown Buyer');
             }
-            
-            console.log('🔍 DEBUG: PURCHASE/RETAIL transaction - fromName:', fromName, 'toName:', toName);
-            console.log('🔍 DEBUG: fromIdentifier:', fromIdentifier, 'toIdentifier:', toIdentifier);
-            console.log('🔍 DEBUG: storedFarmerName:', storedFarmerName, 'farmerName:', farmerName);
-            console.log('🔍 DEBUG: storedBuyerName:', storedBuyerName);
           } else {
             // For other transactions, use name resolver for both
             fromName = await nameResolver.resolveName(fromIdentifier || 'Unknown');
             toName = await nameResolver.resolveName(toIdentifier || 'Unknown');
-            console.log('🔍 DEBUG: OTHER transaction - fromName:', fromName, 'toName:', toName);
           }
           
           // Ensure we have valid names - fallback to dynamic resolution if needed
@@ -421,7 +411,8 @@ export class TransactionManager {
             productDetails: {
               crop: batch.crop_type,
               variety: batch.variety,
-              grading: batch.grading
+              grading: batch.grading,
+              harvestDate: batch.harvest_date || ''
             },
             metadata: parsedMetadata,
             ipfsHash: file.ipfs_hash,
@@ -433,21 +424,18 @@ export class TransactionManager {
           transactions.push(cleanedTransaction);
         }
 
-        console.log(`Found ${transactions.length} transactions for batch ${batchId} from group_files`);
-        
         // Also check transactions table for any additional transactions
         try {
-          const { data: dbTransactions, error: dbError } = await (supabase as any)
+          const { data: dbTransactions, error: dbError } = await supabase
             .from('transactions')
             .select('*')
             .eq('batch_id', batchId)
             .order('transaction_timestamp', { ascending: true });
           
           if (!dbError && dbTransactions && dbTransactions.length > 0) {
-            console.log(`Found ${dbTransactions.length} additional transactions from transactions table`);
             // Merge transactions from both sources
             const dbTransactionsMapped = await Promise.all(
-              dbTransactions.map(async (record: any) => {
+              dbTransactions.map(async (record: TransactionRow) => {
                 // Resolve profile IDs to names
                 let fromName = record.from_address;
                 let toName = record.to_address;
@@ -456,7 +444,7 @@ export class TransactionManager {
                 
                 if (uuidRegex.test(record.from_address)) {
                   try {
-                    const { data: fromProfile } = await (supabase as any)
+                    const { data: fromProfile } = await supabase
                       .from('profiles')
                       .select('full_name, user_type')
                       .eq('id', record.from_address)
@@ -481,7 +469,7 @@ export class TransactionManager {
                 
                 if (uuidRegex.test(record.to_address)) {
                   try {
-                    const { data: toProfile } = await (supabase as any)
+                    const { data: toProfile } = await supabase
                       .from('profiles')
                       .select('full_name, user_type')
                       .eq('id', record.to_address)
@@ -523,7 +511,6 @@ export class TransactionManager {
             // Sort by timestamp
             allTransactions.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
             
-            console.log(`Total transactions after merge: ${allTransactions.length}`);
             return allTransactions;
           }
         } catch (dbError) {
@@ -535,7 +522,7 @@ export class TransactionManager {
 
       // Fallback: try to get from transactions table if it exists
       try {
-        const { data, error } = await (supabase as any)
+        const { data, error } = await supabase
           .from('transactions')
           .select('*')
           .eq('batch_id', batchId)
@@ -548,7 +535,7 @@ export class TransactionManager {
 
         // Resolve profile IDs to names for transactions table records
         const transactionsWithNames = await Promise.all(
-          (data || []).map(async (record: any) => {
+          (data || []).map(async (record: TransactionRow) => {
             // Resolve from_address and to_address (profile IDs) to names
             let fromName = record.from_address;
             let toName = record.to_address;
@@ -559,7 +546,7 @@ export class TransactionManager {
             if (uuidRegex.test(record.from_address)) {
               // It's a UUID, resolve to name
               try {
-                const { data: fromProfile } = await (supabase as any)
+                const { data: fromProfile } = await supabase
                   .from('profiles')
                   .select('full_name, user_type')
                   .eq('id', record.from_address)
@@ -585,7 +572,7 @@ export class TransactionManager {
             if (uuidRegex.test(record.to_address)) {
               // It's a UUID, resolve to name
               try {
-                const { data: toProfile } = await (supabase as any)
+                const { data: toProfile } = await supabase
                   .from('profiles')
                   .select('full_name, user_type')
                   .eq('id', record.to_address)
@@ -648,7 +635,7 @@ export class TransactionManager {
       // Get farmer name for cleanup
       let farmerName = null;
       try {
-        const { data: batch } = await (supabase as any)
+        const { data: batch } = await supabase
           .from('batches')
           .select('profiles(full_name), farmer_id, user_id')
           .eq('id', batchId)
@@ -657,7 +644,7 @@ export class TransactionManager {
         if (batch?.profiles?.full_name) {
           farmerName = batch.profiles.full_name;
         } else if (batch?.farmer_id) {
-          const { data: farmerProfile } = await (supabase as any)
+          const { data: farmerProfile } = await supabase
             .from('profiles')
             .select('full_name')
             .eq('id', batch.farmer_id)
@@ -726,11 +713,9 @@ export class TransactionManager {
   /**
    * Get blockchain transaction history for a batch
    */
-  async getBlockchainTransactionHistory(batchId: string): Promise<any[]> {
+  async getBlockchainTransactionHistory(batchId: string): Promise<SupplyChainTransaction[]> {
     try {
-      console.log('🔍 DEBUG: Fetching blockchain transaction history for batch:', batchId);
       const blockchainTransactions = await blockchainTransactionManager.getBatchTransactionHistory(batchId);
-      console.log('🔍 DEBUG: Blockchain transactions:', blockchainTransactions);
       return blockchainTransactions;
     } catch (error) {
       console.error('Error fetching blockchain transaction history:', error);
@@ -741,23 +726,15 @@ export class TransactionManager {
   /**
    * Get complete transaction history (database + blockchain)
    */
-  async getCompleteTransactionHistory(batchId: string): Promise<any[]> {
+  async getCompleteTransactionHistory(batchId: string): Promise<SupplyChainTransaction[]> {
     try {
-      console.log('🔍 DEBUG: Fetching complete transaction history for batch:', batchId);
-      
       // Get database transactions
       const dbTransactions = await this.getBatchTransactions(batchId);
-      console.log('🔍 DEBUG: Database transactions:', dbTransactions);
-      
       // Get blockchain transactions
       const blockchainTransactions = await this.getBlockchainTransactionHistory(batchId);
-      console.log('🔍 DEBUG: Blockchain transactions:', blockchainTransactions);
-      
       // Merge and sort by timestamp
       const allTransactions = [...dbTransactions, ...blockchainTransactions];
       allTransactions.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
-      
-      console.log('🔍 DEBUG: Complete transaction history:', allTransactions);
       return allTransactions;
     } catch (error) {
       console.error('Error fetching complete transaction history:', error);
@@ -796,21 +773,25 @@ export class TransactionManager {
   /**
    * Map database record to transaction object
    */
-  private mapDatabaseToTransaction(data: any): SupplyChainTransaction {
-    const transaction = {
+  private mapDatabaseToTransaction(data: TransactionRow): SupplyChainTransaction {
+    const transaction: SupplyChainTransaction = {
       transactionId: data.transaction_id,
       type: data.type,
-      from: data.from_address,
-      to: data.to_address,
-      quantity: data.quantity,
-      price: data.price,
-      timestamp: data.transaction_timestamp,
+      from: data.from_address ?? 'Unknown User',
+      to: data.to_address ?? 'Unknown User',
+      quantity: data.quantity ?? 0,
+      price: data.price ?? 0,
+      timestamp: data.transaction_timestamp || new Date().toISOString(),
       previousTransactionHash: data.previous_transaction_hash,
-      batchId: data.batch_id,
-      productDetails: data.product_details,
-      metadata: data.metadata,
-      ipfsHash: data.ipfs_hash,
-      blockchainHash: data.blockchain_hash
+      batchId: data.batch_id ?? '',
+      productDetails: (data.product_details as SupplyChainTransaction['productDetails']) ?? {
+        crop: '',
+        variety: '',
+        harvestDate: '',
+      },
+      metadata: data.metadata ?? undefined,
+      ipfsHash: data.ipfs_hash ?? '',
+      blockchainHash: data.blockchain_hash ?? undefined
     };
     
     // Clean up the transaction data
